@@ -1,4 +1,5 @@
 import { ValueObject } from '../../../../shared/base/ValueObject'
+import { EscrowCodeFormatError } from '../errors/escrow-code.errors'
 
 interface EscrowCodeProps {
   value: string
@@ -16,7 +17,7 @@ export class EscrowCode extends ValueObject<EscrowCodeProps> {
   static create(raw: string): EscrowCode {
     const normalised = raw.trim().toUpperCase()
     if (!CODE_REGEX.test(normalised)) {
-      throw new Error(
+      throw new EscrowCodeFormatError(
         `"${raw}" is not a valid escrow code — must be 6 uppercase alphanumeric characters`,
       )
     }

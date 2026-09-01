@@ -7,10 +7,6 @@ import {
   resolveDisputeSchema,
 } from './escrow.schema'
 
-// escrowHandlers returns plain async functions.
-// Each function: parse request → call service → reply.send().
-// No domain logic, no entity methods, no field picking.
-
 export function escrowHandlers(service: EscrowService) {
   return {
     // GET /:code/public — no auth required

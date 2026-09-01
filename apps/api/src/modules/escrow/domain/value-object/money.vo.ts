@@ -1,4 +1,10 @@
 import { ValueObject } from '../../../../shared/base/ValueObject'
+import {
+  MoneyNegativeAmountError,
+  MoneyMissingCurrencyError,
+  MoneySubtractionUnderflowError,
+  MoneyCurrencyMismatchError,
+} from '../errors/money.errors'
 
 interface MoneyProps {
   amount: number // always stored as a positive number
@@ -14,8 +20,8 @@ export class Money extends ValueObject<MoneyProps> {
   }
 
   static of(amount: number, currency: string): Money {
-    if (amount < 0) throw new Error(`Money amount cannot be negative (got ${amount})`)
-    if (!currency || currency.trim().length === 0) throw new Error('Currency is required')
+    if (amount < 0) throw new MoneyNegativeAmountError(`Money amount cannot be negative (got ${amount})`)
+    if (!currency || currency.trim().length === 0) throw new MoneyMissingCurrencyError('Currency is required')
     return new Money({ amount, currency: currency.trim().toUpperCase() })
   }
 
@@ -39,7 +45,7 @@ export class Money extends ValueObject<MoneyProps> {
     this.assertSameCurrency(other)
     const result = this.amount - other.amount
     if (result < 0)
-      throw new Error(
+      throw new MoneySubtractionUnderflowError(
         `Cannot subtract ${other.amount} from ${this.amount} — result would be negative`,
       )
     return Money.of(result, this.currency)
@@ -60,7 +66,7 @@ export class Money extends ValueObject<MoneyProps> {
 
   private assertSameCurrency(other: Money): void {
     if (this.currency !== other.currency) {
-      throw new Error(`Currency mismatch: ${this.currency} vs ${other.currency}`)
+      throw new MoneyCurrencyMismatchError(`Currency mismatch: ${this.currency} vs ${other.currency}`)
     }
   }
 }

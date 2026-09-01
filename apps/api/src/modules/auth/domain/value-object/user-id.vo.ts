@@ -1,4 +1,5 @@
 import { ValueObject } from '../../../../shared/base/ValueObject'
+import { UserIdEmptyError } from '../errors/auth.errors'
 
 interface UserIdProps {
   value: string
@@ -13,7 +14,7 @@ export class UserId extends ValueObject<UserIdProps> {
 
   static create(value: string): UserId {
     if (!value || value.trim().length === 0) {
-      throw new Error('UserId cannot be empty')
+      throw new UserIdEmptyError('UserId cannot be empty')
     }
     return new UserId({ value: value.trim() })
   }

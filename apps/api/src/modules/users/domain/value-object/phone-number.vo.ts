@@ -1,4 +1,5 @@
 import { ValueObject } from '../../../../shared/base/ValueObject'
+import { PhoneNumberFormatError } from '../errors/user.errors'
 
 interface PhoneNumberProps {
   value: string
@@ -24,7 +25,7 @@ export class PhoneNumber extends ValueObject<PhoneNumberProps> {
       return new PhoneNumber({ value: cleaned })
     }
 
-    throw new Error(`"${raw}" is not a valid Nigerian phone number`)
+    throw new PhoneNumberFormatError(`"${raw}" is not a valid Nigerian phone number`)
   }
 
   get value(): string {

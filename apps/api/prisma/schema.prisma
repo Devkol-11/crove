@@ -12,12 +12,6 @@ datasource db {
 // ENUMS
 // ─────────────────────────────────────────────
 
-// Classifies whether an Account row represents a credential login or OAuth
-enum ProviderAccountType {
-  Credentials
-  OAuth
-}
-
 enum EscrowType {
   Standard    // Buyer/Seller — delivery + confirmation
   Milestone   // Progress-based multi-payment
@@ -129,12 +123,12 @@ model Session {
 // One row per auth method per user.
 // Email/password: providerId = "credential", password stored here (hashed by Better Auth)
 // OAuth: providerId = "google" / "github", tokens stored here
-// type field classifies the category (Credentials vs OAuth)
+// Use providerId to determine the account type — no separate type column needed.
 model Account {
-  id                    String               @id @default(cuid())
-  accountId             String               // User's ID within the provider
-  providerId            String               // "credential" | "google" | "github"
-  type                  ProviderAccountType  @default(Credentials)
+  id                    String   @id @default(cuid())
+  accountId             String   // User's ID within the provider
+  providerId            String   // "credential" | "google" | "github"
+  issuer                String?  // Better Auth v1.7+: "local:credential" or OAuth issuer URL
   userId                String
   user                  User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
   accessToken           String?

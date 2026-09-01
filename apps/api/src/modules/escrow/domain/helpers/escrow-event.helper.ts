@@ -1,4 +1,4 @@
-import type { PrismaClient } from '@prisma/client'
+import type { PrismaClient, Prisma } from '@prisma/client'
 
 type DbClient = Omit<
   PrismaClient,
@@ -17,7 +17,7 @@ export async function appendEscrowEvent(
       escrowId,
       type,
       actor,
-      metadata: metadata ?? null,
+      metadata: (metadata ?? undefined) as Prisma.InputJsonValue | undefined,
     },
   })
 }

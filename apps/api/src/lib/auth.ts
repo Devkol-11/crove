@@ -7,6 +7,11 @@ import { UserRegisteredEvent } from '../modules/auth/domain/events/user-register
 import { EmailVerifiedEvent } from '../modules/auth/domain/events/email-verified.event'
 
 export const auth = betterAuth({
+  // The public URL of this API server.
+  // Better Auth uses this to build absolute URLs for OAuth callbacks,
+  // email verification links, and password reset links.
+  baseURL: env.APP_URL,
+
   // Signs and verifies session tokens. Required — without this Better Auth
   // generates a random secret on each restart, invalidating all active sessions.
   secret: env.BETTER_AUTH_SECRET,
@@ -20,6 +25,21 @@ export const auth = betterAuth({
     // Better Auth handles password hashing (bcrypt) and comparison internally.
     // We never store or touch a raw password anywhere in application code.
   },
+
+  // Google OAuth — only activated when credentials are present in env.
+  // Adds: GET /api/auth/sign-in/google (redirect) + GET /api/auth/callback/google (handler)
+  // Get credentials: https://console.cloud.google.com → APIs & Services → Credentials
+  // Authorised redirect URI to register there: <CORS_ORIGIN>/api/auth/callback/google
+  ...(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET
+    ? {
+        socialProviders: {
+          google: {
+            clientId: env.GOOGLE_CLIENT_ID,
+            clientSecret: env.GOOGLE_CLIENT_SECRET,
+          },
+        },
+      }
+    : {}),
 
   session: {
     expiresIn:  60 * 60 * 24 * 7, // 7 days — how long a session lives

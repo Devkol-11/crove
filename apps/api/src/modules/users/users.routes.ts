@@ -12,7 +12,7 @@ import { usersHandlers } from './users.controller'
 // Nothing from the domain leaks past the service boundary.
 
 export default async function usersRoutes(app: FastifyInstance) {
-  const service = new UsersService(app.db)
+  const service = new UsersService(app.db, app)
   const h = usersHandlers(service)
 
   // GET /api/users/profile

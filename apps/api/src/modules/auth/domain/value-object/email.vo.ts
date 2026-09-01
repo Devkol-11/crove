@@ -1,4 +1,5 @@
 import { ValueObject } from '../../../../shared/base/ValueObject'
+import { EmailFormatError } from '../errors/auth.errors'
 
 interface EmailProps {
   value: string
@@ -14,7 +15,7 @@ export class Email extends ValueObject<EmailProps> {
   static create(raw: string): Email {
     const normalised = raw.trim().toLowerCase()
     if (!EMAIL_REGEX.test(normalised)) {
-      throw new Error(`"${raw}" is not a valid email address`)
+      throw new EmailFormatError(`"${raw}" is not a valid email address`)
     }
     return new Email({ value: normalised })
   }

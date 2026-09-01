@@ -9,6 +9,11 @@ import {
 } from '../../escrow.types'
 import type { CreateEscrowInput } from '../../escrow.schema'
 import { EscrowCreatedEvent } from '../events/escrow-created.event'
+import {
+  EscrowInvalidTransitionError,
+  EscrowUnsupportedCurrencyError,
+  MilestoneDeadlinePastError,
+} from '../errors/escrow.errors'
 import { EscrowFundedEvent } from '../events/escrow-funded.event'
 import { EscrowReleasedEvent } from '../events/escrow-released.event'
 
@@ -67,17 +72,17 @@ export class EscrowAggregate extends AggregateRoot<string> {
 
   assertCanTransitionTo(next: EscrowStatus): void {
     if (!this.canTransitionTo(next)) {
-      throw new Error(
+      throw new EscrowInvalidTransitionError(
         `Escrow "${this.code}" cannot move from '${this.status}' to '${next}'. ` +
           `Valid next states: [${
-            Object.entries({
+            ({
               Created: 'AwaitingPayment, Cancelled',
               AwaitingPayment: 'Funded, Cancelled',
               Funded: 'Held, Refunded',
               Held: 'AwaitingAction, Released, Refunded, Disputed',
               AwaitingAction: 'Released, Refunded, Disputed',
               Disputed: 'Released, Refunded',
-            })[this.status] ?? 'none — this is a terminal state'
+            } as Record<string, string>)[this.status] ?? 'none — this is a terminal state'
           }]`,
       )
     }
@@ -160,7 +165,7 @@ export class EscrowAggregate extends AggregateRoot<string> {
     const SUPPORTED_CURRENCIES = ['NGN', 'USD', 'GBP', 'EUR']
 
     if (!SUPPORTED_CURRENCIES.includes(input.currency)) {
-      throw new Error(
+      throw new EscrowUnsupportedCurrencyError(
         `Unsupported currency '${input.currency}'. Supported: ${SUPPORTED_CURRENCIES.join(', ')}.`,
       )
     }
@@ -169,7 +174,7 @@ export class EscrowAggregate extends AggregateRoot<string> {
       const now = new Date()
       for (const m of input.milestones) {
         if (m.deadline && new Date(m.deadline) <= now) {
-          throw new Error(
+          throw new MilestoneDeadlinePastError(
             `Milestone deadline '${m.deadline}' is in the past. Deadlines must be future dates.`,
           )
         }

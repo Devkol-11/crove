@@ -1,14 +1,22 @@
 import type { PrismaClient } from '@prisma/client'
 import type { FastifyInstance } from 'fastify'
 import { customAlphabet } from 'nanoid'
-import { EscrowStatus, EscrowRole, EscrowType, LedgerEntryType, TransactionType } from './escrow.types'
+import {
+  EscrowStatus,
+  EscrowRole,
+  EscrowType,
+  LedgerEntryType,
+  TransactionType,
+} from './escrow.types'
 import type { CreateEscrowInput } from './escrow.schema'
 import { EscrowAggregate } from './domain/entity/escrow.aggregate'
-import { EscrowDisputeEntity } from './domain/entity/escrow-dispute.entity'  // used only for assertions, not return types
+import { EscrowDisputeEntity } from './domain/entity/escrow-dispute.entity'
 import { appendEscrowEvent } from './domain/helpers/escrow-event.helper'
 import { createTransaction } from './domain/helpers/transaction.helper'
 import { appendLedgerEntry, getLedgerBalance } from './domain/helpers/ledger.helper'
 import { eventDispatcher } from '../../lib/event-dispatcher'
+import { withDbErrorHandler } from '../../lib/db.error.handler'
+import { mapDomainError } from '../../lib/domain.error.mapper'
 
 const generateCode = customAlphabet('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', 6)
 
@@ -21,63 +29,58 @@ export class EscrowService {
   // ── create ────────────────────────────────────────────────────────────────
 
   async create(creatorId: string, input: CreateEscrowInput) {
-    // ── 1. Aggregate validates domain invariants ──────────────────────────
-    //
-    // This runs BEFORE any DB write. Zod already checked shape (positive numbers,
-    // non-empty strings). The aggregate checks meaning: supported currency,
-    // milestone deadlines in the future, etc.
-    // If this throws, the controller returns a 400 immediately — nothing was written.
     try {
       EscrowAggregate.assertValidCreationInput(input)
     } catch (err) {
-      throw this.app.httpErrors.badRequest((err as Error).message)
+      throw mapDomainError(err, this.app)
     }
 
     const code = generateCode()
-
     const amount =
       input.type === EscrowType.Milestone
         ? input.milestones.reduce((sum, m) => sum + m.amount, 0)
         : input.amount
 
-    // ── 2. Persist via Prisma ────────────────────────────────────────────
-    const escrowData = await this.db.escrow.create({
-      data: {
-        code,
-        title:       input.title,
-        description: input.description,
-        type:        input.type,
-        status:      EscrowStatus.Created,
-        amount,
-        currency:    input.currency,
-        releaseCondition:
-          input.type === EscrowType.Conditional ? input.releaseCondition : null,
-        creatorId,
-        participants: {
-          create: { userId: creatorId, role: EscrowRole.Creator },
-        },
-        ...(input.type === EscrowType.Milestone && {
-          milestones: {
-            create: input.milestones.map((m, i) => ({
-              title:       m.title,
-              description: m.description,
-              amount:      m.amount,
-              deadline:    m.deadline ? new Date(m.deadline) : null,
-              order:       i + 1,
-            })),
-          },
+    const escrowData = await withDbErrorHandler(
+      () =>
+        this.db.$transaction(async (tx) => {
+          const created = await tx.escrow.create({
+            data: {
+              code,
+              title: input.title,
+              description: input.description,
+              type: input.type,
+              status: EscrowStatus.Created,
+              amount,
+              currency: input.currency,
+              releaseCondition:
+                input.type === EscrowType.Conditional ? input.releaseCondition : null,
+              creatorId,
+              participants: {
+                create: { userId: creatorId, role: EscrowRole.Creator },
+              },
+              ...(input.type === EscrowType.Milestone && {
+                milestones: {
+                  create: input.milestones.map((m, i) => ({
+                    title: m.title,
+                    description: m.description,
+                    amount: m.amount,
+                    deadline: m.deadline ? new Date(m.deadline) : null,
+                    order: i + 1,
+                  })),
+                },
+              }),
+            },
+            include: { milestones: true, participants: true },
+          })
+
+          await appendEscrowEvent(tx, created.id, 'EscrowCreated', creatorId)
+
+          return created
         }),
-      },
-      include: { milestones: true, participants: true },
-    })
+      this.app,
+    )
 
-    // ── 3. Append audit event ─────────────────────────────────────────────
-    //
-    // Separate query — audit events are non-critical. If this fails,
-    // the escrow row still exists in a valid state.
-    await appendEscrowEvent(this.db, escrowData.id, 'EscrowCreated', creatorId)
-
-    // ── 4. Wrap in aggregate, raise and dispatch domain event ────────────
     const escrow = EscrowAggregate.from(escrowData)
     escrow.raiseCreatedEvent(creatorId)
     await eventDispatcher.dispatchMany(escrow.domainEvents)
@@ -89,31 +92,24 @@ export class EscrowService {
   // ── transition ────────────────────────────────────────────────────────────
 
   async transition(escrowId: string, actorId: string, toStatus: EscrowStatus) {
-    // ── 1. Load from DB ──────────────────────────────────────────────────
-    const data = await this.db.escrow.findUnique({
-      where:   { id: escrowId },
-      include: { participants: true },
-    })
+    const data = await withDbErrorHandler(
+      () => this.db.escrow.findUnique({ where: { id: escrowId }, include: { participants: true } }),
+      this.app,
+    )
     if (!data) throw this.app.httpErrors.notFound('Escrow not found')
 
-    // ── 2. Wrap in aggregate ─────────────────────────────────────────────
     const escrow = EscrowAggregate.from(data)
 
-    // ── 3. Validate the state transition ─────────────────────────────────
     try {
       escrow.assertCanTransitionTo(toStatus)
     } catch (err) {
-      throw this.app.httpErrors.badRequest((err as Error).message)
+      throw mapDomainError(err, this.app)
     }
 
-    // ── 4. Authorisation check ───────────────────────────────────────────
     if (!escrow.isParticipant(actorId)) {
       throw this.app.httpErrors.forbidden('You are not a participant in this escrow')
     }
 
-    // ── 5. Execute the business command ──────────────────────────────────
-    //
-    // The command method queues a domain event internally. No DB write yet.
     switch (toStatus) {
       case EscrowStatus.Funded:
         escrow.fund(actorId)
@@ -123,68 +119,63 @@ export class EscrowService {
         break
     }
 
-    // ── 6. Persist atomically: status + audit event + ledger entry ────────
-    //
-    // $transaction ensures all three writes commit together or not at all.
-    // In a financial app the ledger entry MUST exist if the status changed —
-    // they cannot be out of sync.
-    const updated = await this.db.$transaction(async (tx) => {
-      const result = await tx.escrow.update({
-        where: { id: escrowId },
-        data: {
-          status:     toStatus,
-          fundedAt:   toStatus === EscrowStatus.Funded   ? new Date() : undefined,
-          releasedAt: toStatus === EscrowStatus.Released ? new Date() : undefined,
-        },
-      })
+    const updated = await withDbErrorHandler(
+      () =>
+        this.db.$transaction(async (tx) => {
+          const result = await tx.escrow.update({
+            where: { id: escrowId },
+            data: {
+              status: toStatus,
+              fundedAt: toStatus === EscrowStatus.Funded ? new Date() : undefined,
+              releasedAt: toStatus === EscrowStatus.Released ? new Date() : undefined,
+            },
+          })
 
-      await appendEscrowEvent(tx, escrowId, `StatusChangedTo${toStatus}`, actorId)
+          await appendEscrowEvent(tx, escrowId, `StatusChangedTo${toStatus}`, actorId)
 
-      if (toStatus === EscrowStatus.Funded) {
-        await appendLedgerEntry(tx, {
-          escrowId,
-          userId:      actorId,
-          type:        LedgerEntryType.Funding,
-          amount:      escrow.amount,
-          currency:    escrow.currency,
-          description: `Escrow ${escrow.code} funded`,
-        })
-        await createTransaction(tx, {
-          escrowId,
-          type:     TransactionType.Funding,
-          amount:   escrow.amount,
-          currency: escrow.currency,
-        })
-      }
+          if (toStatus === EscrowStatus.Funded) {
+            await appendLedgerEntry(tx, {
+              escrowId,
+              userId: actorId,
+              type: LedgerEntryType.Funding,
+              amount: escrow.amount,
+              currency: escrow.currency,
+              description: `Escrow ${escrow.code} funded`,
+            })
+            await createTransaction(tx, {
+              escrowId,
+              type: TransactionType.Funding,
+              amount: escrow.amount,
+              currency: escrow.currency,
+            })
+          }
 
-      if (toStatus === EscrowStatus.Released) {
-        await appendLedgerEntry(tx, {
-          escrowId,
-          type:        LedgerEntryType.Release,
-          amount:      escrow.amount,
-          currency:    escrow.currency,
-          description: `Escrow ${escrow.code} funds released to seller`,
-        })
-      }
+          if (toStatus === EscrowStatus.Released) {
+            await appendLedgerEntry(tx, {
+              escrowId,
+              type: LedgerEntryType.Release,
+              amount: escrow.amount,
+              currency: escrow.currency,
+              description: `Escrow ${escrow.code} funds released to seller`,
+            })
+          }
 
-      if (toStatus === EscrowStatus.Refunded) {
-        await appendLedgerEntry(tx, {
-          escrowId,
-          userId:      actorId,
-          type:        LedgerEntryType.Refund,
-          amount:      escrow.amount,
-          currency:    escrow.currency,
-          description: `Escrow ${escrow.code} refunded to buyer`,
-        })
-      }
+          if (toStatus === EscrowStatus.Refunded) {
+            await appendLedgerEntry(tx, {
+              escrowId,
+              userId: actorId,
+              type: LedgerEntryType.Refund,
+              amount: escrow.amount,
+              currency: escrow.currency,
+              description: `Escrow ${escrow.code} refunded to buyer`,
+            })
+          }
 
-      return result
-    })
+          return result
+        }),
+      this.app,
+    )
 
-    // ── 7. Dispatch domain events ─────────────────────────────────────────
-    //
-    // Only after the transaction committed. If $transaction threw, we never
-    // reach here — no false events fire.
     await eventDispatcher.dispatchMany(escrow.domainEvents)
     escrow.clearDomainEvents()
 
@@ -194,10 +185,10 @@ export class EscrowService {
   // ── openDispute ───────────────────────────────────────────────────────────
 
   async openDispute(escrowId: string, raisedById: string, reason: string) {
-    const data = await this.db.escrow.findUnique({
-      where:   { id: escrowId },
-      include: { participants: true },
-    })
+    const data = await withDbErrorHandler(
+      () => this.db.escrow.findUnique({ where: { id: escrowId }, include: { participants: true } }),
+      this.app,
+    )
     if (!data) throw this.app.httpErrors.notFound('Escrow not found')
 
     const escrow = EscrowAggregate.from(data)
@@ -209,31 +200,36 @@ export class EscrowService {
     try {
       escrow.assertCanTransitionTo(EscrowStatus.Disputed)
     } catch (err) {
-      throw this.app.httpErrors.badRequest((err as Error).message)
+      throw mapDomainError(err, this.app)
     }
 
-    const disputeData = await this.db.$transaction(async (tx) => {
-      const dispute = await tx.escrowDispute.create({
-        data: { escrowId, raisedById, reason },
-      })
+    return withDbErrorHandler(
+      () =>
+        this.db.$transaction(async (tx) => {
+          const dispute = await tx.escrowDispute.create({
+            data: { escrowId, raisedById, reason },
+          })
 
-      await tx.escrow.update({
-        where: { id: escrowId },
-        data:  { status: EscrowStatus.Disputed },
-      })
+          await tx.escrow.update({
+            where: { id: escrowId },
+            data: { status: EscrowStatus.Disputed },
+          })
 
-      await appendEscrowEvent(tx, escrowId, 'DisputeOpened', raisedById, { reason })
+          await appendEscrowEvent(tx, escrowId, 'DisputeOpened', raisedById, { reason })
 
-      return dispute
-    })
-
-    return disputeData
+          return dispute
+        }),
+      this.app,
+    )
   }
 
   // ── resolveDispute ────────────────────────────────────────────────────────
 
   async resolveDispute(disputeId: string, resolution: string, resolvedById: string) {
-    const data = await this.db.escrowDispute.findUnique({ where: { id: disputeId } })
+    const data = await withDbErrorHandler(
+      () => this.db.escrowDispute.findUnique({ where: { id: disputeId } }),
+      this.app,
+    )
     if (!data) throw this.app.httpErrors.notFound('Dispute not found')
 
     const dispute = EscrowDisputeEntity.from(data)
@@ -241,57 +237,72 @@ export class EscrowService {
     try {
       dispute.assertCanResolve()
     } catch (err) {
-      throw this.app.httpErrors.badRequest((err as Error).message)
+      throw mapDomainError(err, this.app)
     }
 
-    const updated = await this.db.$transaction(async (tx) => {
-      const result = await tx.escrowDispute.update({
-        where: { id: disputeId },
-        data:  { status: 'Resolved', resolution, resolvedAt: new Date() },
-      })
+    return withDbErrorHandler(
+      () =>
+        this.db.$transaction(async (tx) => {
+          const result = await tx.escrowDispute.update({
+            where: { id: disputeId },
+            data: { status: 'Resolved', resolution, resolvedAt: new Date() },
+          })
 
-      await appendEscrowEvent(tx, dispute.escrowId, 'DisputeResolved', resolvedById, { resolution })
+          await appendEscrowEvent(tx, dispute.escrowId, 'DisputeResolved', resolvedById, {
+            resolution,
+          })
 
-      return result
-    })
-
-    return updated
+          return result
+        }),
+      this.app,
+    )
   }
 
   // ── Queries ───────────────────────────────────────────────────────────────
 
   async getByCode(code: string) {
-    const escrow = await this.db.escrow.findUnique({
-      where:   { code },
-      include: {
-        creator:      { select: { id: true, firstName: true, lastName: true, email: true } },
-        participants: { include: { user: { select: { id: true, firstName: true, lastName: true } } } },
-        milestones:   { orderBy: { order: 'asc' } },
-        events:       { orderBy: { createdAt: 'desc' }, take: 20 },
-        disputes:     true,
-        ledgerEntries: { orderBy: { createdAt: 'asc' } },
-      },
-    })
+    const escrow = await withDbErrorHandler(
+      () =>
+        this.db.escrow.findUnique({
+          where: { code },
+          include: {
+            creator: { select: { id: true, firstName: true, lastName: true, email: true } },
+            participants: {
+              include: { user: { select: { id: true, firstName: true, lastName: true } } },
+            },
+            milestones: { orderBy: { order: 'asc' } },
+            events: { orderBy: { createdAt: 'desc' }, take: 20 },
+            disputes: true,
+            ledgerEntries: { orderBy: { createdAt: 'asc' } },
+          },
+        }),
+      this.app,
+    )
     if (!escrow) throw this.app.httpErrors.notFound('Escrow not found')
     return escrow
   }
 
   async listByUser(userId: string) {
-    return this.db.escrow.findMany({
-      where: {
-        OR: [
-          { creatorId: userId },
-          { participants: { some: { userId } } },
-        ],
-      },
-      include: { milestones: { orderBy: { order: 'asc' } } },
-      orderBy: { createdAt: 'desc' },
-    })
+    return withDbErrorHandler(
+      () =>
+        this.db.escrow.findMany({
+          where: {
+            OR: [{ creatorId: userId }, { participants: { some: { userId } } }],
+          },
+          include: { milestones: { orderBy: { order: 'asc' } } },
+          orderBy: { createdAt: 'desc' },
+        }),
+      this.app,
+    )
   }
 
   async getLedgerBalance(escrowId: string) {
-    const escrow = await this.db.escrow.findUnique({ where: { id: escrowId } })
+    const escrow = await withDbErrorHandler(
+      () => this.db.escrow.findUnique({ where: { id: escrowId } }),
+      this.app,
+    )
     if (!escrow) throw this.app.httpErrors.notFound('Escrow not found')
-    return getLedgerBalance(this.db, escrowId)
+
+    return withDbErrorHandler(() => getLedgerBalance(this.db, escrowId), this.app)
   }
 }
