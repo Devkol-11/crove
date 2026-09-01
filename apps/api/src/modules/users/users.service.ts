@@ -4,13 +4,25 @@ import { PhoneNumber } from './domain/value-object/phone-number.vo'
 import { ProfileUpdatedEvent } from './domain/events/profile-updated.event'
 import { eventDispatcher } from '../../lib/event-dispatcher'
 import type { UpdateProfileInput } from './users.schema'
+import { email } from 'better-auth'
 
 export class UsersService {
   constructor(private readonly db: PrismaClient) {}
 
-  async getProfile(userId: string): Promise<UserProfile> {
+  async getProfile(userId: string) {
     const data = await this.db.user.findUniqueOrThrow({ where: { id: userId } })
-    return UserProfile.from(data)
+    const profile = UserProfile.from(data)
+
+    return {
+      id: profile.id,
+      email: profile.email,
+      displayName: profile.getDisplayName(),
+      firstName: profile.firstName,
+      lastName: profile.lastName,
+      phone: profile.phone,
+      image: profile.image,
+      hasCompletedProfile: profile.hasCompletedProfile(),
+    }
   }
 
   async updateProfile(userId: string, input: UpdateProfileInput): Promise<UserProfile> {

@@ -8,7 +8,7 @@ export async function usersController(app: FastifyInstance) {
   app.addHook('preHandler', app.authenticate)
 
   app.get('/profile', async (request: FastifyRequest, reply: FastifyReply) => {
-    const profile = await usersService.getProfile(request.authUser!.id)
+    const response = await usersService.getProfile(request.authUser!.id)
 
     return reply.send({
       id: profile.id,

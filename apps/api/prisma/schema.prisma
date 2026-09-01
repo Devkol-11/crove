@@ -72,6 +72,13 @@ enum DisputeStatus {
   Closed
 }
 
+enum LedgerEntryType {
+  Funding   // Buyer deposits funds into the escrow
+  Release   // Funds disbursed to the seller
+  Refund    // Funds returned to the buyer
+  Fee       // Platform fee deducted
+}
+
 // ─────────────────────────────────────────────
 // AUTH MODELS
 // Required by Better Auth — field names must match exactly.
@@ -173,11 +180,12 @@ model Escrow {
   creatorId String
   creator   User   @relation("EscrowCreator", fields: [creatorId], references: [id])
 
-  participants EscrowParticipant[]
-  milestones   Milestone[]
-  transactions EscrowTransaction[]
-  events       EscrowEvent[]
-  disputes     EscrowDispute[]
+  participants  EscrowParticipant[]
+  milestones    Milestone[]
+  transactions  EscrowTransaction[]
+  events        EscrowEvent[]
+  disputes      EscrowDispute[]
+  ledgerEntries LedgerEntry[]
 
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
@@ -264,4 +272,22 @@ model EscrowDispute {
   updatedAt  DateTime      @updatedAt
 
   @@map("disputes")
+}
+
+// Every money movement in the application is recorded here — append-only.
+// This is the internal ledger used for reconciliation and audit.
+// Rows are never updated or deleted. New movements always create a new row.
+model LedgerEntry {
+  id          String           @id @default(cuid())
+  escrowId    String
+  escrow      Escrow           @relation(fields: [escrowId], references: [id])
+  userId      String?          // The party this movement concerns
+  type        LedgerEntryType
+  amount      Decimal          @db.Decimal(15, 2)
+  currency    String           @default("NGN")
+  reference   String           @unique  // Idempotency key — prevents double-writes
+  description String
+  createdAt   DateTime         @default(now())
+
+  @@map("ledger_entries")
 }

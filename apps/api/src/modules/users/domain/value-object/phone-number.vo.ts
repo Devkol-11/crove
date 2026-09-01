@@ -1,13 +1,11 @@
 import { ValueObject } from '../../../../shared/base/ValueObject'
 
 interface PhoneNumberProps {
-  value: string // stored in E.164 format: +2348012345678
+  value: string
 }
 
-// Nigerian phone number validation.
-// Accepts local format (08012345678) and E.164 (+2348012345678) and normalises to E.164.
-const NG_LOCAL_REGEX  = /^0[789][01]\d{8}$/
-const E164_REGEX      = /^\+234[789][01]\d{8}$/
+const NG_LOCAL_REGEX = /^0[789][01]\d{8}$/
+const E164_REGEX = /^\+234[789][01]\d{8}$/
 
 export class PhoneNumber extends ValueObject<PhoneNumberProps> {
   private constructor(props: PhoneNumberProps) {
