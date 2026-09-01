@@ -1,0 +1,9 @@
+{
+  "name": "web",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "dev": "echo 'web app not yet scaffolded'",
+    "build": "echo 'web app not yet scaffolded'"
+  }
+}

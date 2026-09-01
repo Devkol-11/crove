@@ -1,0 +1,23 @@
+{
+  "name": "crove",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "dev:api": "pnpm --filter api dev",
+    "build:api": "pnpm --filter api build",
+    "dev:web": "pnpm --filter web dev",
+    "db:generate": "pnpm --filter api db:generate",
+    "db:migrate": "pnpm --filter api db:migrate",
+    "db:studio": "pnpm --filter api db:studio",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down"
+  },
+  "devDependencies": {
+    "prettier": "^3.3.0",
+    "typescript": "^5.5.0"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  }
+}

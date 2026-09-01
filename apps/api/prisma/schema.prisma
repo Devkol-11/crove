@@ -1,0 +1,267 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  // No url here in Prisma 7 — connection configured in prisma.config.ts (migrate)
+  // and via the PrismaPg adapter in src/lib/prisma.ts (runtime queries)
+}
+
+// ─────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────
+
+// Classifies whether an Account row represents a credential login or OAuth
+enum ProviderAccountType {
+  Credentials
+  OAuth
+}
+
+enum EscrowType {
+  Standard    // Buyer/Seller — delivery + confirmation
+  Milestone   // Progress-based multi-payment
+  Conditional // Condition-gated release
+  Deposit     // Upfront reservation deposit
+}
+
+enum EscrowStatus {
+  Created
+  AwaitingPayment
+  Funded
+  Held
+  AwaitingAction
+  Released
+  Refunded
+  Disputed
+  Cancelled
+}
+
+enum MilestoneStatus {
+  Pending
+  InProgress
+  Submitted  // Seller submitted for buyer approval
+  Approved   // Buyer approved
+  Released   // Funds disbursed for this milestone
+}
+
+enum EscrowRole {
+  Creator
+  Buyer
+  Seller
+}
+
+enum TransactionType {
+  Funding
+  Release
+  Refund
+  Fee
+}
+
+enum TransactionStatus {
+  Pending
+  Processing
+  Completed
+  Failed
+}
+
+enum DisputeStatus {
+  Open
+  UnderReview
+  Resolved
+  Closed
+}
+
+// ─────────────────────────────────────────────
+// AUTH MODELS
+// Required by Better Auth — field names must match exactly.
+// Better Auth's Prisma adapter reads these models via prisma.user,
+// prisma.session, prisma.account, prisma.verification.
+// ─────────────────────────────────────────────
+
+model User {
+  id            String    @id @default(cuid())
+  name          String                          // Better Auth: full display name
+  email         String    @unique
+  emailVerified Boolean   @default(false)       // Better Auth: tracks email verification
+  image         String?                         // Better Auth: avatar URL
+  // Crove-specific profile fields
+  firstName     String?
+  lastName      String?
+  phone         String?   @unique
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Better Auth relations
+  sessions      Session[]
+  accounts      Account[]
+
+  // Crove relations
+  createdEscrows Escrow[]            @relation("EscrowCreator")
+  participations EscrowParticipant[]
+  disputes       EscrowDispute[]
+
+  @@map("users")
+}
+
+// Tracks active login sessions (Better Auth manages this)
+model Session {
+  id        String   @id @default(cuid())
+  expiresAt DateTime
+  token     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+// One row per auth method per user.
+// Email/password: providerId = "credential", password stored here (hashed by Better Auth)
+// OAuth: providerId = "google" / "github", tokens stored here
+// type field classifies the category (Credentials vs OAuth)
+model Account {
+  id                    String               @id @default(cuid())
+  accountId             String               // User's ID within the provider
+  providerId            String               // "credential" | "google" | "github"
+  type                  ProviderAccountType  @default(Credentials)
+  userId                String
+  user                  User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?              // Hashed — only for Credentials accounts
+  createdAt             DateTime             @default(now())
+  updatedAt             DateTime             @updatedAt
+
+  @@map("accounts")
+}
+
+// Stores email verification and password reset tokens
+model Verification {
+  id         String    @id @default(cuid())
+  identifier String    // Email address being verified
+  value      String    // The one-time token/code
+  expiresAt  DateTime
+  createdAt  DateTime? @default(now())
+  updatedAt  DateTime? @updatedAt
+
+  @@map("verifications")
+}
+
+// ─────────────────────────────────────────────
+// CROVE MODELS
+// ─────────────────────────────────────────────
+
+model Escrow {
+  id               String       @id @default(cuid())
+  code             String       @unique  // Short link code e.g. "8F72KD"
+  title            String
+  description      String?
+  type             EscrowType
+  status           EscrowStatus @default(Created)
+  amount           Decimal      @db.Decimal(15, 2)
+  currency         String       @default("NGN")
+  releaseCondition String?      // Used by Conditional type
+
+  creatorId String
+  creator   User   @relation("EscrowCreator", fields: [creatorId], references: [id])
+
+  participants EscrowParticipant[]
+  milestones   Milestone[]
+  transactions EscrowTransaction[]
+  events       EscrowEvent[]
+  disputes     EscrowDispute[]
+
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  fundedAt   DateTime?
+  releasedAt DateTime?
+
+  @@map("escrows")
+}
+
+model EscrowParticipant {
+  id       String     @id @default(cuid())
+  escrowId String
+  escrow   Escrow     @relation(fields: [escrowId], references: [id])
+  userId   String?
+  user     User?      @relation(fields: [userId], references: [id])
+  email    String?    // For invited participants who haven't registered yet
+  role     EscrowRole
+  joinedAt DateTime   @default(now())
+
+  @@unique([escrowId, userId])
+  @@map("escrow_participants")
+}
+
+model Milestone {
+  id          String          @id @default(cuid())
+  escrowId    String
+  escrow      Escrow          @relation(fields: [escrowId], references: [id])
+  title       String
+  description String?
+  amount      Decimal         @db.Decimal(15, 2)
+  status      MilestoneStatus @default(Pending)
+  order       Int
+  deadline    DateTime?
+  submittedAt DateTime?
+  approvedAt  DateTime?
+  releasedAt  DateTime?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  @@map("milestones")
+}
+
+model EscrowTransaction {
+  id          String            @id @default(cuid())
+  escrowId    String
+  escrow      Escrow            @relation(fields: [escrowId], references: [id])
+  type        TransactionType
+  amount      Decimal           @db.Decimal(15, 2)
+  currency    String            @default("NGN")
+  reference   String            @unique  // Internal reference
+  status      TransactionStatus @default(Pending)
+  provider    String?           // e.g. "paystack"
+  providerRef String?           // External payment reference
+  metadata    Json?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  @@map("escrow_transactions")
+}
+
+model EscrowEvent {
+  id        String   @id @default(cuid())
+  escrowId  String
+  escrow    Escrow   @relation(fields: [escrowId], references: [id])
+  type      String   // e.g. "EscrowCreated", "StatusChanged"
+  actor     String?  // userId or "system"
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  @@map("escrow_events")
+}
+
+model EscrowDispute {
+  id         String        @id @default(cuid())
+  escrowId   String
+  escrow     Escrow        @relation(fields: [escrowId], references: [id])
+  raisedById String
+  raisedBy   User          @relation(fields: [raisedById], references: [id])
+  reason     String
+  status     DisputeStatus @default(Open)
+  resolution String?
+  resolvedAt DateTime?
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+
+  @@map("disputes")
+}
