@@ -2,36 +2,56 @@ import { Worker } from 'bullmq'
 import type Redis from 'ioredis'
 import { QUEUE_NAMES } from '../index'
 import type { DomainEvent } from '../../shared/base/DomainEvent'
+import { db } from '../../lib/prisma'
 import { log } from '../../lib/logger'
 
 const workerLog = log.worker.escrow
 
+export const ESCROW_JOBS = {
+  EXPIRE_ESCROW: 'escrow.expire',
+} as const
+
+interface ExpireEscrowPayload {
+  escrowId: string
+}
+
 export function startEscrowWorker(redis: Redis) {
-  const worker = new Worker<DomainEvent>(
+  const worker = new Worker<DomainEvent | ExpireEscrowPayload>(
     QUEUE_NAMES.ESCROW,
     async (job) => {
-      const event = job.data
+      // Internal jobs have a distinct name; domain events use their eventType as the job name
+      if (job.name === ESCROW_JOBS.EXPIRE_ESCROW) {
+        const { escrowId } = job.data as ExpireEscrowPayload
+        const escrow = await db.escrow.findUnique({ where: { id: escrowId } })
+        if (!escrow) return
+
+        const cancellableStatuses = new Set(['Created', 'AwaitingPayment'])
+        if (!cancellableStatuses.has(escrow.status)) return
+
+        await db.escrow.update({
+          where: { id: escrowId },
+          data:  { status: 'Cancelled' },
+        })
+        workerLog.info({ escrowId, code: escrow.code }, 'escrow expired and cancelled')
+        return
+      }
+
+      // Domain events
+      const event = job.data as DomainEvent
 
       switch (event.eventType) {
         case 'escrow.created':
-          // TODO: set an expiry timer if the escrow isn't funded within 48 hours
-          workerLog.info(
-            { aggregateId: event.aggregateId },
-            'escrow created — post-create checks pending',
-          )
+          workerLog.info({ aggregateId: event.aggregateId }, 'escrow created')
           break
 
         case 'escrow.funded':
-          // TODO: schedule an auto-release deadline job via BullMQ delayed jobs:
-          //   await escrowQueue.add('escrow.auto_release', { escrowId }, { delay: ms('7d') })
-          workerLog.info(
-            { aggregateId: event.aggregateId },
-            'escrow funded — auto-release timer pending',
-          )
+          // TODO: schedule auto-release deadline job:
+          //   await escrowQueue.add('escrow.expire', { escrowId }, { delay: ms('7d') })
+          workerLog.info({ aggregateId: event.aggregateId }, 'escrow funded — auto-release timer pending')
           break
 
         case 'escrow.released':
-          // TODO: trigger Paystack payout to the seller's bank account
+          // TODO: trigger Paystack payout to the payee's bank account
           workerLog.info({ aggregateId: event.aggregateId }, 'escrow released — payout pending')
           break
 
@@ -41,23 +61,17 @@ export function startEscrowWorker(redis: Redis) {
           break
 
         case 'milestone.submitted':
-          // TODO: start buyer-review deadline timer (e.g. auto-approve after 3 days)
-          workerLog.info(
-            { aggregateId: event.aggregateId },
-            'milestone submitted — review timer pending',
-          )
+          // TODO: start payer-review deadline timer (e.g. auto-approve after 3 days)
+          workerLog.info({ aggregateId: event.aggregateId }, 'milestone submitted — review timer pending')
           break
 
         case 'milestone.approved':
-          // TODO: release milestone funds to seller
-          workerLog.info(
-            { aggregateId: event.aggregateId },
-            'milestone approved — funds release pending',
-          )
+          // TODO: release milestone funds to payee
+          workerLog.info({ aggregateId: event.aggregateId }, 'milestone approved — funds release pending')
           break
 
         default:
-          workerLog.warn({ eventType: event.eventType }, 'unhandled event type — skipped')
+          workerLog.warn({ jobName: job.name }, 'unhandled escrow job — skipped')
       }
     },
     { connection: redis },

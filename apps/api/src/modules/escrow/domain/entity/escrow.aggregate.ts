@@ -57,7 +57,7 @@ export class EscrowAggregate extends AggregateRoot<string> {
   get currency(): string {
     return this.props.currency
   }
-  get creatorId(): string {
+  get creatorId(): string | null {
     return this.props.creatorId
   }
   get releaseCondition(): string | null {
@@ -76,12 +76,12 @@ export class EscrowAggregate extends AggregateRoot<string> {
         `Escrow "${this.code}" cannot move from '${this.status}' to '${next}'. ` +
           `Valid next states: [${
             ({
-              Created: 'AwaitingPayment, Cancelled',
+              Created:         'AwaitingPayment, Funded, Cancelled',
               AwaitingPayment: 'Funded, Cancelled',
-              Funded: 'Held, Refunded',
-              Held: 'AwaitingAction, Released, Refunded, Disputed',
-              AwaitingAction: 'Released, Refunded, Disputed',
-              Disputed: 'Released, Refunded',
+              Funded:          'Held, Refunded',
+              Held:            'AwaitingAction, Released, Refunded, Disputed',
+              AwaitingAction:  'Released, Refunded, Disputed',
+              Disputed:        'Released, Refunded',
             } as Record<string, string>)[this.status] ?? 'none — this is a terminal state'
           }]`,
       )
@@ -104,13 +104,11 @@ export class EscrowAggregate extends AggregateRoot<string> {
   }
 
   canUserFund(userId: string): boolean {
-    const role = this.getRoleForUser(userId)
-    return role === EscrowRole.Buyer || role === EscrowRole.Creator
+    return this.getRoleForUser(userId) === EscrowRole.Payer
   }
 
   canUserApprove(userId: string): boolean {
-    const role = this.getRoleForUser(userId)
-    return role === EscrowRole.Buyer || role === EscrowRole.Creator
+    return this.getRoleForUser(userId) === EscrowRole.Payer
   }
 
   // ── Financial invariants ─────────────────────────────────────────────────

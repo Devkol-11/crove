@@ -40,9 +40,8 @@ enum MilestoneStatus {
 }
 
 enum EscrowRole {
-  Creator
-  Buyer
-  Seller
+  Payer  // The party depositing money into escrow
+  Payee  // The party receiving funds after delivery
 }
 
 enum TransactionType {
@@ -170,9 +169,11 @@ model Escrow {
   amount           Decimal      @db.Decimal(15, 2)
   currency         String       @default("NGN")
   releaseCondition String?      // Used by Conditional type
+  isQuickLink      Boolean      @default(false)
+  expiresAt        DateTime?
 
-  creatorId String
-  creator   User   @relation("EscrowCreator", fields: [creatorId], references: [id])
+  creatorId String?
+  creator   User?  @relation("EscrowCreator", fields: [creatorId], references: [id])
 
   participants  EscrowParticipant[]
   milestones    Milestone[]
@@ -180,6 +181,7 @@ model Escrow {
   events        EscrowEvent[]
   disputes      EscrowDispute[]
   ledgerEntries LedgerEntry[]
+  joinOtps      EscrowJoinOtp[]
 
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
@@ -195,7 +197,8 @@ model EscrowParticipant {
   escrow   Escrow     @relation(fields: [escrowId], references: [id])
   userId   String?
   user     User?      @relation(fields: [userId], references: [id])
-  email    String?    // For invited participants who haven't registered yet
+  name     String?    // Display name for non-auth participants (quick links)
+  email    String?    // For invited/non-auth participants
   role     EscrowRole
   joinedAt DateTime   @default(now())
 
@@ -266,6 +269,21 @@ model EscrowDispute {
   updatedAt  DateTime      @updatedAt
 
   @@map("disputes")
+}
+
+// One-time codes sent to quick-link recipients to verify their identity before joining.
+model EscrowJoinOtp {
+  id        String    @id @default(cuid())
+  escrowId  String
+  escrow    Escrow    @relation(fields: [escrowId], references: [id], onDelete: Cascade)
+  email     String
+  name      String
+  code      String    // 6-digit numeric OTP
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@map("escrow_join_otps")
 }
 
 // Every money movement in the application is recorded here — append-only.

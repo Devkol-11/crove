@@ -6,85 +6,121 @@ export default async function escrowRoutes(app: FastifyInstance) {
   const service = new EscrowService(app.db, app)
   const h = escrowHandlers(service)
 
-  // ── Public ────────────────────────────────────────────────────────────────
-  // Payment link recipients view this without an account.
+  // ── Public routes (no auth) ───────────────────────────────────────────────
+
+  // Role-aware view for link recipients — returns funding status + which role is still open
   app.get(
     '/:code/public',
-    {
-      config: { rateLimit: { max: 120, timeWindow: '1 minute' } },
-    },
-    h.getPublic,
+    { config: { rateLimit: { max: 120, timeWindow: '1 minute' } } },
+    h.getPublicView,
   )
 
-  // ── Authenticated ─────────────────────────────────────────────────────────
+  // Create a quick link escrow without an account
+  app.post(
+    '/quick',
+    { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } },
+    h.createQuick,
+  )
 
-  // GET /api/escrow — list escrows the user participates in
+  // Request OTP to join a quick link escrow as the missing participant
+  app.post(
+    '/:code/join',
+    { config: { rateLimit: { max: 5, timeWindow: '1 minute' } } },
+    h.requestJoinOtp,
+  )
+
+  // Verify OTP and join the escrow
+  app.post(
+    '/:code/join/verify',
+    { config: { rateLimit: { max: 5, timeWindow: '1 minute' } } },
+    h.verifyJoinAndJoin,
+  )
+
+  // ── Authenticated routes ──────────────────────────────────────────────────
+
+  const auth = { preHandler: app.authenticate }
+
+  // List escrows the user participates in
   app.get(
     '/',
-    {
-      preHandler: app.authenticate,
-      config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
-    },
+    { ...auth, config: { rateLimit: { max: 60, timeWindow: '1 minute' } } },
     h.list,
   )
 
-  // POST /api/escrow — create a new escrow
+  // Create a full escrow (Standard / Milestone / Conditional / Deposit)
   app.post(
     '/',
-    {
-      preHandler: app.authenticate,
-      config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
-    },
+    { ...auth, config: { rateLimit: { max: 10, timeWindow: '1 minute' } } },
     h.create,
   )
 
-  // GET /api/escrow/:code — full authenticated view
+  // Full authenticated view of an escrow
   app.get(
     '/:code',
-    {
-      preHandler: app.authenticate,
-      config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
-    },
+    { ...auth, config: { rateLimit: { max: 60, timeWindow: '1 minute' } } },
     h.getByCode,
   )
 
-  // POST /api/escrow/:id/transition — trigger a state change
+  // Fund — Payer deposits money, transitions escrow to Funded
   app.post(
-    '/:id/transition',
-    {
-      preHandler: app.authenticate,
-      config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
-    },
-    h.transition,
+    '/:id/fund',
+    { ...auth, config: { rateLimit: { max: 10, timeWindow: '1 minute' } } },
+    h.fund,
   )
 
-  // POST /api/escrow/:id/dispute — open a dispute on a funded escrow
+  // Release — Payer approves delivery, releases funds to Payee
+  app.post(
+    '/:id/release',
+    { ...auth, config: { rateLimit: { max: 10, timeWindow: '1 minute' } } },
+    h.release,
+  )
+
+  // Refund — return funds to Payer (mutual agreement or admin decision)
+  app.post(
+    '/:id/refund',
+    { ...auth, config: { rateLimit: { max: 10, timeWindow: '1 minute' } } },
+    h.refund,
+  )
+
+  // Cancel — cancel before funding
+  app.post(
+    '/:id/cancel',
+    { ...auth, config: { rateLimit: { max: 10, timeWindow: '1 minute' } } },
+    h.cancel,
+  )
+
+  // Open a dispute on a funded escrow
   app.post(
     '/:id/dispute',
-    {
-      preHandler: app.authenticate,
-      config: { rateLimit: { max: 5, timeWindow: '1 minute' } },
-    },
+    { ...auth, config: { rateLimit: { max: 5, timeWindow: '1 minute' } } },
     h.openDispute,
   )
 
-  // POST /api/escrow/disputes/:id/resolve — resolve an open dispute
+  // Resolve an open dispute
   app.post(
     '/disputes/:id/resolve',
-    {
-      preHandler: app.authenticate,
-      config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
-    },
+    { ...auth, config: { rateLimit: { max: 10, timeWindow: '1 minute' } } },
     h.resolveDispute,
   )
 
-  // GET /api/escrow/:id/balance — ledger-derived held balance
+  // Milestone: Payee marks work as done, Payer receives review request
+  app.post(
+    '/:id/milestones/:milestoneId/submit',
+    { ...auth, config: { rateLimit: { max: 20, timeWindow: '1 minute' } } },
+    h.submitMilestone,
+  )
+
+  // Milestone: Payer approves submitted work, triggers partial release
+  app.post(
+    '/:id/milestones/:milestoneId/approve',
+    { ...auth, config: { rateLimit: { max: 20, timeWindow: '1 minute' } } },
+    h.approveMilestone,
+  )
+
+  // Ledger balance (how much is currently held)
   app.get(
     '/:id/balance',
-    {
-      preHandler: app.authenticate,
-      config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
-    },
+    { ...auth, config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
     h.getLedgerBalance,
   )
 }

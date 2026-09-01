@@ -14,6 +14,9 @@ export class EscrowParticipantEntity extends Entity<string> {
   get userId(): string | null {
     return this.props.userId
   }
+  get name(): string | null {
+    return this.props.name
+  }
   get email(): string | null {
     return this.props.email
   }
@@ -24,28 +27,26 @@ export class EscrowParticipantEntity extends Entity<string> {
     return this.props.escrowId
   }
 
-  isCreator(): boolean {
-    return this.role === EscrowRole.Creator
-  }
-  isBuyer(): boolean {
-    return this.role === EscrowRole.Buyer
-  }
-  isSeller(): boolean {
-    return this.role === EscrowRole.Seller
+  isPayer(): boolean {
+    return this.role === EscrowRole.Payer
   }
 
-  // Buyers fund the escrow; sellers cannot
+  isPayee(): boolean {
+    return this.role === EscrowRole.Payee
+  }
+
+  // Payers deposit funds; payees cannot fund their own escrow
   canFund(): boolean {
-    return this.isBuyer() || this.isCreator()
+    return this.isPayer()
   }
 
-  // Buyers confirm delivery; sellers cannot approve their own work
+  // Payers confirm delivery and approve payout
   canApproveDelivery(): boolean {
-    return this.isBuyer() || this.isCreator()
+    return this.isPayer()
   }
 
-  // Sellers mark work as submitted
+  // Payees mark work as submitted for payer review
   canSubmitWork(): boolean {
-    return this.isSeller()
+    return this.isPayee()
   }
 }

@@ -12,6 +12,8 @@ const envSchema = z.object({
   // Public URL of this API server — used by Better Auth to build OAuth callback
   // and email verification URLs. Must be reachable by external services (Google, email).
   APP_URL: z.string().default('http://localhost:3001'),
+  // Public URL of the frontend app — used to build payment links (crove.app/e/{code})
+  FRONTEND_URL: z.string().default('http://localhost:3000'),
   // Optional — Google OAuth only activates when both are present.
   // Get these from https://console.cloud.google.com → APIs & Services → Credentials
   GOOGLE_CLIENT_ID: z.string().optional(),

@@ -1,34 +1,33 @@
 export enum EscrowType {
-  Standard = 'Standard',
-  Milestone = 'Milestone',
-  Conditional = 'Conditional',
-  Deposit = 'Deposit',
+  Standard    = 'Standard',    // Payer/Payee — delivery + confirmation
+  Milestone   = 'Milestone',   // Progress-based multi-payment
+  Conditional = 'Conditional', // Condition-gated release
+  Deposit     = 'Deposit',     // Upfront reservation deposit
 }
 
 export enum EscrowStatus {
-  Created = 'Created',
+  Created         = 'Created',
   AwaitingPayment = 'AwaitingPayment',
-  Funded = 'Funded',
-  Held = 'Held',
-  AwaitingAction = 'AwaitingAction',
-  Released = 'Released',
-  Refunded = 'Refunded',
-  Disputed = 'Disputed',
-  Cancelled = 'Cancelled',
+  Funded          = 'Funded',
+  Held            = 'Held',
+  AwaitingAction  = 'AwaitingAction',
+  Released        = 'Released',
+  Refunded        = 'Refunded',
+  Disputed        = 'Disputed',
+  Cancelled       = 'Cancelled',
 }
 
 export enum MilestoneStatus {
-  Pending = 'Pending',
+  Pending    = 'Pending',
   InProgress = 'InProgress',
-  Submitted = 'Submitted',
-  Approved = 'Approved',
-  Released = 'Released',
+  Submitted  = 'Submitted', // Payee submitted for payer approval
+  Approved   = 'Approved',  // Payer approved
+  Released   = 'Released',  // Funds disbursed for this milestone
 }
 
 export enum EscrowRole {
-  Creator = 'Creator',
-  Buyer   = 'Buyer',
-  Seller  = 'Seller',
+  Payer = 'Payer', // The party depositing money into escrow
+  Payee = 'Payee', // The party receiving funds after delivery
 }
 
 export enum DisputeStatus {
@@ -53,16 +52,19 @@ export enum TransactionStatus {
 }
 
 export enum LedgerEntryType {
-  Funding = 'Funding',
-  Release = 'Release',
-  Refund  = 'Refund',
-  Fee     = 'Fee',
+  Funding = 'Funding', // Payer deposits funds
+  Release = 'Release', // Funds disbursed to payee
+  Refund  = 'Refund',  // Funds returned to payer
+  Fee     = 'Fee',     // Platform fee deducted
 }
 
+// Payer can fund from Created OR AwaitingPayment — both paths lead to Funded.
+// AwaitingPayment exists for cases where the payer signals intent (link shared)
+// before the actual Paystack payment completes.
 export const VALID_TRANSITIONS: Record<EscrowStatus, EscrowStatus[]> = {
-  [EscrowStatus.Created]: [EscrowStatus.AwaitingPayment, EscrowStatus.Cancelled],
+  [EscrowStatus.Created]:         [EscrowStatus.AwaitingPayment, EscrowStatus.Funded, EscrowStatus.Cancelled],
   [EscrowStatus.AwaitingPayment]: [EscrowStatus.Funded, EscrowStatus.Cancelled],
-  [EscrowStatus.Funded]: [EscrowStatus.Held, EscrowStatus.Refunded],
+  [EscrowStatus.Funded]:          [EscrowStatus.Held, EscrowStatus.Refunded],
   [EscrowStatus.Held]: [
     EscrowStatus.AwaitingAction,
     EscrowStatus.Released,
@@ -74,9 +76,9 @@ export const VALID_TRANSITIONS: Record<EscrowStatus, EscrowStatus[]> = {
     EscrowStatus.Refunded,
     EscrowStatus.Disputed,
   ],
-  [EscrowStatus.Released]: [],
-  [EscrowStatus.Refunded]: [],
-  [EscrowStatus.Disputed]: [EscrowStatus.Released, EscrowStatus.Refunded],
+  [EscrowStatus.Released]:  [],
+  [EscrowStatus.Refunded]:  [],
+  [EscrowStatus.Disputed]:  [EscrowStatus.Released, EscrowStatus.Refunded],
   [EscrowStatus.Cancelled]: [],
 }
 
