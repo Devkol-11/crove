@@ -5,8 +5,9 @@ const envSchema = z.object({
   PORT: z.string().default('3001'),
   DATABASE_URL: z.string(),
   REDIS_URL: z.string().default('redis://localhost:6379'),
-  JWT_SECRET: z.string(),
-  JWT_EXPIRES_IN: z.string().default('7d'),
+  // Used by Better Auth to sign and verify session tokens.
+  // Must be at least 32 characters. Rotate this if sessions are ever compromised.
+  BETTER_AUTH_SECRET: z.string().min(32, 'BETTER_AUTH_SECRET must be at least 32 characters'),
   LOG_LEVEL: z.string().default('info'),
   CORS_ORIGIN: z.string().default('http://localhost:3000'),
 })

@@ -7,6 +7,10 @@ import { UserRegisteredEvent } from '../modules/auth/domain/events/user-register
 import { EmailVerifiedEvent } from '../modules/auth/domain/events/email-verified.event'
 
 export const auth = betterAuth({
+  // Signs and verifies session tokens. Required — without this Better Auth
+  // generates a random secret on each restart, invalidating all active sessions.
+  secret: env.BETTER_AUTH_SECRET,
+
   database: prismaAdapter(db, {
     provider: 'postgresql',
   }),
