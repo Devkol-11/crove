@@ -4,7 +4,7 @@ import { customAlphabet } from 'nanoid'
 import { EscrowStatus, EscrowRole, EscrowType, LedgerEntryType, TransactionType } from './escrow.types'
 import type { CreateEscrowInput } from './escrow.schema'
 import { EscrowAggregate } from './domain/entity/escrow.aggregate'
-import { EscrowDisputeEntity } from './domain/entity/escrow-dispute.entity'
+import { EscrowDisputeEntity } from './domain/entity/escrow-dispute.entity'  // used only for assertions, not return types
 import { appendEscrowEvent } from './domain/helpers/escrow-event.helper'
 import { createTransaction } from './domain/helpers/transaction.helper'
 import { appendLedgerEntry, getLedgerBalance } from './domain/helpers/ledger.helper'
@@ -227,7 +227,7 @@ export class EscrowService {
       return dispute
     })
 
-    return EscrowDisputeEntity.from(disputeData)
+    return disputeData
   }
 
   // ── resolveDispute ────────────────────────────────────────────────────────
@@ -255,7 +255,7 @@ export class EscrowService {
       return result
     })
 
-    return EscrowDisputeEntity.from(updated)
+    return updated
   }
 
   // ── Queries ───────────────────────────────────────────────────────────────

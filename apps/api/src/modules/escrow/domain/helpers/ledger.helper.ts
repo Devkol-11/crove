@@ -2,7 +2,10 @@ import type { PrismaClient } from '@prisma/client'
 import { customAlphabet } from 'nanoid'
 import { LedgerEntryType } from '../../escrow.types'
 
-type DbClient = Omit<PrismaClient, '$connect' | '$disconnect' | '$on' | '$transaction' | '$use' | '$extends'>
+type DbClient = Omit<
+  PrismaClient,
+  '$connect' | '$disconnect' | '$on' | '$transaction' | '$use' | '$extends'
+>
 
 const generateRef = customAlphabet('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', 12)
 
@@ -27,24 +30,24 @@ const generateRef = customAlphabet('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', 12)
 export async function appendLedgerEntry(
   db: DbClient,
   data: {
-    escrowId:    string
-    type:        LedgerEntryType
-    amount:      number
-    currency:    string
+    escrowId: string
+    type: LedgerEntryType
+    amount: number
+    currency: string
     description: string
-    userId?:     string    // The party this movement is for/from
-    reference?:  string    // Provide for idempotency; auto-generated if omitted
+    userId?: string
+    reference?: string
   },
 ) {
   return db.ledgerEntry.create({
     data: {
-      escrowId:    data.escrowId,
-      userId:      data.userId ?? null,
-      type:        data.type,
-      amount:      data.amount,
-      currency:    data.currency,
+      escrowId: data.escrowId,
+      userId: data.userId ?? null,
+      type: data.type,
+      amount: data.amount,
+      currency: data.currency,
       description: data.description,
-      reference:   data.reference ?? `LDG-${generateRef()}`,
+      reference: data.reference ?? `LDG-${generateRef()}`,
     },
   })
 }

@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { EscrowType } from './escrow.types'
+import { EscrowType, EscrowStatus } from './escrow.types'
 
 const milestoneSchema = z.object({
   title: z.string().min(1),
@@ -45,3 +45,18 @@ export const createEscrowSchema = z.discriminatedUnion('type', [
 ])
 
 export type CreateEscrowInput = z.infer<typeof createEscrowSchema>
+
+export const transitionSchema = z.object({
+  status: z.nativeEnum(EscrowStatus),
+})
+export type TransitionInput = z.infer<typeof transitionSchema>
+
+export const openDisputeSchema = z.object({
+  reason: z.string().min(10, 'Please provide a detailed reason (min 10 characters)'),
+})
+export type OpenDisputeInput = z.infer<typeof openDisputeSchema>
+
+export const resolveDisputeSchema = z.object({
+  resolution: z.string().min(10, 'Please provide a detailed resolution (min 10 characters)'),
+})
+export type ResolveDisputeInput = z.infer<typeof resolveDisputeSchema>
