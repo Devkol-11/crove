@@ -28,8 +28,10 @@ export const log = {
   config: logger.child({ module: 'config' }),
   db:     logger.child({ module: 'db' }),
   events: logger.child({ module: 'events' }),
+  auth:   logger.child({ module: 'auth' }),
   worker: {
     notifications: logger.child({ module: 'worker:notifications' }),
     escrow:        logger.child({ module: 'worker:escrow' }),
+    auth:          logger.child({ module: 'worker:auth' }),
   },
 }

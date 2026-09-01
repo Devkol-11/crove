@@ -82,8 +82,11 @@ export class EscrowService {
     )
 
     const escrow = EscrowAggregate.from(escrowData)
+
     escrow.raiseCreatedEvent(creatorId)
+
     await eventDispatcher.dispatchMany(escrow.domainEvents)
+
     escrow.clearDomainEvents()
 
     return escrowData

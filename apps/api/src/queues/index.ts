@@ -4,23 +4,31 @@ import type Redis from 'ioredis'
 export const QUEUE_NAMES = {
   NOTIFICATIONS: 'notifications',
   ESCROW: 'escrow',
+  AUTH: 'auth',
 } as const
 
 export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES]
 
 let _notificationsQueue: Queue | undefined
 let _escrowQueue: Queue | undefined
+let _authQueue: Queue | undefined
 
 export function createQueues(redis: Redis) {
   _notificationsQueue = new Queue(QUEUE_NAMES.NOTIFICATIONS, { connection: redis })
   _escrowQueue = new Queue(QUEUE_NAMES.ESCROW, { connection: redis })
+  _authQueue = new Queue(QUEUE_NAMES.AUTH, { connection: redis })
 
-  return { notificationsQueue: _notificationsQueue, escrowQueue: _escrowQueue }
+  return {
+    notificationsQueue: _notificationsQueue,
+    escrowQueue: _escrowQueue,
+    authQueue: _authQueue,
+  }
 }
 
 export function getQueues() {
   return {
     notificationsQueue: _notificationsQueue,
     escrowQueue: _escrowQueue,
+    authQueue: _authQueue,
   }
 }

@@ -6,6 +6,7 @@ import { ProfileUpdatedEvent } from './domain/events/profile-updated.event'
 import { eventDispatcher } from '../../lib/event-dispatcher'
 import { withDbErrorHandler } from '../../lib/db.error.handler'
 import { mapDomainError } from '../../lib/domain.error.mapper'
+import { invalidateUserCache } from '../../plugins/auth.plugin'
 import type { UpdateProfileInput } from './users.schema'
 
 export interface ProfileDto {
@@ -82,6 +83,7 @@ export class UsersService {
     )
 
     await eventDispatcher.dispatch(new ProfileUpdatedEvent(userId, changedFields))
+    await invalidateUserCache(this.app.redis, userId)
 
     return toDto(profile)
   }

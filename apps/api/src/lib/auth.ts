@@ -5,6 +5,8 @@ import { env } from '../config'
 import { eventDispatcher } from './event-dispatcher'
 import { UserRegisteredEvent } from '../modules/auth/domain/events/user-registered.event'
 import { EmailVerifiedEvent } from '../modules/auth/domain/events/email-verified.event'
+import { getQueues } from '../queues'
+import { AUTH_JOBS } from '../queues/workers/auth.worker'
 
 export const auth = betterAuth({
   // The public URL of this API server.
@@ -27,9 +29,11 @@ export const auth = betterAuth({
   },
 
   // Google OAuth — only activated when credentials are present in env.
-  // Adds: GET /api/auth/sign-in/google (redirect) + GET /api/auth/callback/google (handler)
+  // Initiate: POST /api/auth/sign-in/social  { provider: "google", callbackURL: "...", disableRedirect?: true }
+  // Callback: GET  /api/auth/callback/google  (handled automatically by Better Auth)
   // Get credentials: https://console.cloud.google.com → APIs & Services → Credentials
-  // Authorised redirect URI to register there: <CORS_ORIGIN>/api/auth/callback/google
+  // Authorised redirect URI to register there: <APP_URL>/api/auth/callback/google
+  //   e.g. http://localhost:3001/api/auth/callback/google (dev)
   ...(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET
     ? {
         socialProviders: {
@@ -58,7 +62,10 @@ export const auth = betterAuth({
     additionalFields: {
       firstName: { type: 'string', required: false },
       lastName:  { type: 'string', required: false },
-      phone:     { type: 'string', required: false },
+      // phone is intentionally excluded — it is a profile field set via
+      // PATCH /api/users/profile, not a sign-up field. Including it here
+      // would let Better Auth pass it during user.create and trigger a
+      // unique constraint violation on repeated sign-up attempts.
     },
   },
 
@@ -75,6 +82,19 @@ export const auth = betterAuth({
         after: async (user) => {
           await eventDispatcher.dispatch(
             new UserRegisteredEvent(user.id, user.email, user.name),
+          )
+
+          // Guard: if account creation fails after this point (adapter error,
+          // schema mismatch, network blip), the user row is left orphaned with
+          // no password or OAuth link — an invalid and unusable state.
+          // This job wakes up 30 s later and deletes the user if no account
+          // was ever linked. On a successful sign-up the account is created
+          // within the same HTTP request (milliseconds), so the job is a no-op.
+          const { authQueue } = getQueues()
+          await authQueue?.add(
+            AUTH_JOBS.CLEANUP_ORPHANED_USER,
+            { userId: user.id },
+            { delay: 30_000 },
           )
         },
       },
