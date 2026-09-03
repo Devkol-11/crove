@@ -58,6 +58,14 @@ enum TransactionStatus {
   Failed
 }
 
+enum PaymentStatus {
+  Pending     // Initiated — awaiting user action on provider checkout page
+  Processing  // Webhook received, confirming with provider
+  Completed   // Payment verified and escrow funded
+  Failed      // Payment failed or verification returned non-success
+  Expired     // Payment link expired before user completed checkout
+}
+
 enum DisputeStatus {
   Open
   UnderReview
@@ -182,6 +190,7 @@ model Escrow {
   disputes      EscrowDispute[]
   ledgerEntries LedgerEntry[]
   joinOtps      EscrowJoinOtp[]
+  payments      Payment[]
 
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
@@ -200,7 +209,14 @@ model EscrowParticipant {
   name     String?    // Display name for non-auth participants (quick links)
   email    String?    // For invited/non-auth participants
   role     EscrowRole
-  joinedAt DateTime   @default(now())
+
+  // Payee payout account — required before an escrow can be funded
+  accountNumber String?  // 10-digit NUBAN
+  bankCode      String?  // e.g. "058" for GTBank — used by payment provider for payouts
+  bankName      String?  // e.g. "Guaranty Trust Bank" — for display
+  accountName   String?  // Verified name on the account
+
+  joinedAt DateTime @default(now())
 
   @@unique([escrowId, userId])
   @@map("escrow_participants")
@@ -240,6 +256,7 @@ model EscrowTransaction {
   createdAt   DateTime          @default(now())
   updatedAt   DateTime          @updatedAt
 
+  @@index([providerRef])
   @@map("escrow_transactions")
 }
 
@@ -302,4 +319,39 @@ model LedgerEntry {
   createdAt   DateTime         @default(now())
 
   @@map("ledger_entries")
+}
+
+// Tracks every payment provider interaction for a funding attempt.
+// One Payment per funding attempt — multiple attempts can exist per escrow.
+model Payment {
+  id               String        @id @default(cuid())
+  escrowId         String
+  escrow           Escrow        @relation(fields: [escrowId], references: [id])
+  reference        String        @unique  // Our internal reference — echoed by provider
+  providerRef      String?                // Provider's own transaction ID
+  provider         String                 // "paystack" | "bachs"
+  amount           Decimal       @db.Decimal(15, 2)
+  currency         String        @default("NGN")
+  status           PaymentStatus @default(Pending)
+  authorizationUrl String?                // Checkout URL returned to user
+  payerEmail       String
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  @@map("payments")
+}
+
+// Append-only log of every raw webhook received from payment providers.
+// The unique constraint on reference provides idempotency — duplicate webhooks
+// are silently ignored rather than processed twice.
+model InboundWebhook {
+  id          String    @id @default(cuid())
+  provider    String
+  eventType   String
+  reference   String    @unique  // Our payment reference extracted from the payload
+  rawPayload  Json
+  processedAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@map("inbound_webhooks")
 }

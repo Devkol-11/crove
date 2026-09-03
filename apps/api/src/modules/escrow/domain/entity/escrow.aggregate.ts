@@ -13,6 +13,7 @@ import {
   EscrowInvalidTransitionError,
   EscrowUnsupportedCurrencyError,
   MilestoneDeadlinePastError,
+  MilestoneTotalExceedsLimitError,
 } from '../errors/escrow.errors'
 import { EscrowFundedEvent } from '../events/escrow-funded.event'
 import { EscrowReleasedEvent } from '../events/escrow-released.event'
@@ -39,32 +40,16 @@ export class EscrowAggregate extends AggregateRoot<string> {
     return new EscrowAggregate(data, data)
   }
 
-  get code(): string {
-    return this.props.code
-  }
-  get title(): string {
-    return this.props.title
-  }
-  get type(): EscrowType {
-    return this.props.type as EscrowType
-  }
-  get status(): EscrowStatus {
-    return this.props.status as EscrowStatus
-  }
-  get amount(): number {
-    return Number(this.props.amount)
-  }
-  get currency(): string {
-    return this.props.currency
-  }
-  get creatorId(): string | null {
-    return this.props.creatorId
-  }
-  get releaseCondition(): string | null {
-    return this.props.releaseCondition
-  }
+  get code(): string { return this.props.code }
+  get title(): string { return this.props.title }
+  get type(): EscrowType { return this.props.type as EscrowType }
+  get status(): EscrowStatus { return this.props.status as EscrowStatus }
+  get amount(): number { return Number(this.props.amount) }
+  get currency(): string { return this.props.currency }
+  get creatorId(): string | null { return this.props.creatorId }
+  get releaseCondition(): string | null { return this.props.releaseCondition }
 
-  // ── State machine ────────────────────────────────────────────────────────
+  // ── State machine ─────────────────────────────────────────────────────────
 
   canTransitionTo(next: EscrowStatus): boolean {
     return canTransition(this.status, next)
@@ -72,26 +57,33 @@ export class EscrowAggregate extends AggregateRoot<string> {
 
   assertCanTransitionTo(next: EscrowStatus): void {
     if (!this.canTransitionTo(next)) {
+      const validNext: Record<string, string> = {
+        Created:         'AwaitingPayment, Funded, Cancelled',
+        AwaitingPayment: 'Funded, Cancelled',
+        Funded:          'Held (auto-transition only — handled by payment worker)',
+        Held:            'AwaitingAction, Released, Disputed',
+        AwaitingAction:  'Released, Refunded, Disputed',
+        Disputed:        'Released, Refunded (via dispute resolution)',
+      }
       throw new EscrowInvalidTransitionError(
         `Escrow "${this.code}" cannot move from '${this.status}' to '${next}'. ` +
-          `Valid next states: [${
-            ({
-              Created:         'AwaitingPayment, Funded, Cancelled',
-              AwaitingPayment: 'Funded, Cancelled',
-              Funded:          'Held, Refunded',
-              Held:            'AwaitingAction, Released, Refunded, Disputed',
-              AwaitingAction:  'Released, Refunded, Disputed',
-              Disputed:        'Released, Refunded',
-            } as Record<string, string>)[this.status] ?? 'none — this is a terminal state'
-          }]`,
+        `Valid next states: [${validNext[this.status] ?? 'none — this is a terminal state'}]`,
       )
     }
   }
 
-  // ── Role-based access ────────────────────────────────────────────────────
+  // ── Role-based access ─────────────────────────────────────────────────────
+  //
+  // Quick-link participants are stored with userId = null. When an authenticated
+  // user accesses a quick-link escrow, match by email as a fallback so they can
+  // perform participant actions. Pass the caller's email from request.authUser.
 
-  getRoleForUser(userId: string): EscrowRole | null {
-    const participant = this.participants.find((p) => p.userId === userId)
+  getRoleForUser(userId: string, userEmail?: string): EscrowRole | null {
+    const participant = this.participants.find(
+      (p) =>
+        p.userId === userId ||
+        (p.userId === null && !!userEmail && p.email === userEmail),
+    )
     return participant ? (participant.role as EscrowRole) : null
   }
 
@@ -99,19 +91,23 @@ export class EscrowAggregate extends AggregateRoot<string> {
     return this.props.creatorId === userId
   }
 
-  isParticipant(userId: string): boolean {
-    return this.participants.some((p) => p.userId === userId)
+  isParticipant(userId: string, userEmail?: string): boolean {
+    return this.participants.some(
+      (p) =>
+        p.userId === userId ||
+        (p.userId === null && !!userEmail && p.email === userEmail),
+    )
   }
 
-  canUserFund(userId: string): boolean {
-    return this.getRoleForUser(userId) === EscrowRole.Payer
+  canUserFund(userId: string, userEmail?: string): boolean {
+    return this.getRoleForUser(userId, userEmail) === EscrowRole.Payer
   }
 
-  canUserApprove(userId: string): boolean {
-    return this.getRoleForUser(userId) === EscrowRole.Payer
+  canUserApprove(userId: string, userEmail?: string): boolean {
+    return this.getRoleForUser(userId, userEmail) === EscrowRole.Payer
   }
 
-  // ── Financial invariants ─────────────────────────────────────────────────
+  // ── Financial invariants ──────────────────────────────────────────────────
 
   isMilestoneType(): boolean {
     return this.type === EscrowType.Milestone
@@ -134,33 +130,11 @@ export class EscrowAggregate extends AggregateRoot<string> {
     )
   }
 
-  // ── Commands (business operations) ──────────────────────────────────────
-  //
-  // Each command:
-  //   1. Validates the operation is currently allowed (throws if not)
-  //   2. Adds the corresponding domain event via addDomainEvent()
-  //
-  // The service then persists the state change to the DB and dispatches
-  // the events via eventDispatcher.dispatchMany(aggregate.domainEvents).
-  //
-  // Notice addDomainEvent() is protected on AggregateRoot — only this class
-  // and its subclasses can call it. External code cannot add arbitrary events.
-
-  // ── Creation invariant validation ────────────────────────────────────────
-  //
-  // Called by EscrowService.create() BEFORE any DB write.
-  //
-  // Why here and not only in Zod?
-  // Zod validates SHAPE: "is amount a positive number?" — a format question.
-  // The aggregate validates MEANING: "does this amount make business sense
-  // for this escrow type?" — a domain question.
-  //
-  // These two layers are complementary, not redundant.
-  //   Zod catches malformed HTTP payloads at the API boundary.
-  //   The aggregate enforces invariants that only the domain understands.
+  // ── Creation validation ───────────────────────────────────────────────────
 
   static assertValidCreationInput(input: CreateEscrowInput): void {
     const SUPPORTED_CURRENCIES = ['NGN', 'USD', 'GBP', 'EUR']
+    const MAX_ESCROW_AMOUNT = 100_000_000
 
     if (!SUPPORTED_CURRENCIES.includes(input.currency)) {
       throw new EscrowUnsupportedCurrencyError(
@@ -169,6 +143,13 @@ export class EscrowAggregate extends AggregateRoot<string> {
     }
 
     if (input.type === EscrowType.Milestone) {
+      const total = input.milestones.reduce((sum, m) => sum + m.amount, 0)
+      if (total > MAX_ESCROW_AMOUNT) {
+        throw new MilestoneTotalExceedsLimitError(
+          `Total milestone amount (${total}) cannot exceed ${MAX_ESCROW_AMOUNT}.`,
+        )
+      }
+
       const now = new Date()
       for (const m of input.milestones) {
         if (m.deadline && new Date(m.deadline) <= now) {
@@ -180,7 +161,8 @@ export class EscrowAggregate extends AggregateRoot<string> {
     }
   }
 
-  // Called by the service immediately after a new escrow is persisted in the DB.
+  // ── Domain event helpers ──────────────────────────────────────────────────
+
   raiseCreatedEvent(creatorId: string): void {
     this.addDomainEvent(
       new EscrowCreatedEvent(this.id, creatorId, this.type, this.amount, this.currency, this.code),

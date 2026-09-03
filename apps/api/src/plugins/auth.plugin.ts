@@ -12,7 +12,9 @@ import { log } from '../lib/logger'
 declare module 'fastify' {
   interface FastifyInstance {
     authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>
+    requireVerifiedEmail: (request: FastifyRequest, reply: FastifyReply) => Promise<void>
   }
+
   interface FastifyRequest {
     authUser: AuthUser | null
     userProfile: UserProfile | null
@@ -98,8 +100,25 @@ export default fp(async function authPlugin(app: FastifyInstance) {
         authLog.info({ userId }, 'user cache miss — fetched from DB and cached')
       }
 
-      request.authUser   = AuthUser.from(prismaUser)
+      request.authUser = AuthUser.from(prismaUser)
       request.userProfile = UserProfile.from(prismaUser)
+    },
+  )
+
+  app.decorate(
+    'requireVerifiedEmail',
+    async function requireVerifiedEmail(
+      request: FastifyRequest,
+      reply: FastifyReply,
+    ): Promise<void> {
+      if (!request.authUser?.isEmailVerified) {
+        return reply.code(403).send({
+          statusCode: 403,
+          error: 'Forbidden',
+          message:
+            'Email verification required. Please verify your email before performing financial actions.',
+        })
+      }
     },
   )
 })

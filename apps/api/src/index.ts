@@ -5,6 +5,7 @@ import { createQueues } from './queues'
 import { startNotificationsWorker } from './queues/workers/notifications.worker'
 import { startEscrowWorker } from './queues/workers/escrow.worker'
 import { startAuthWorker } from './queues/workers/auth.worker'
+import { startPaymentWorker } from './queues/workers/payment.worker'
 
 const start = async () => {
   const app = await buildApp()
@@ -14,6 +15,7 @@ const start = async () => {
   startNotificationsWorker(app.redis)
   startEscrowWorker(app.redis)
   startAuthWorker(app.redis)
+  startPaymentWorker(app.redis)
 
   try {
     await app.listen({ port: Number(env.PORT), host: '0.0.0.0' })

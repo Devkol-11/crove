@@ -38,7 +38,9 @@ export default async function escrowRoutes(app: FastifyInstance) {
 
   // ── Authenticated routes ──────────────────────────────────────────────────
 
-  const auth = { preHandler: app.authenticate }
+  const auth         = { preHandler: [app.authenticate] }
+  // Financial action routes additionally require a verified email address
+  const financialAuth = { preHandler: [app.authenticate, app.requireVerifiedEmail] }
 
   // List escrows the user participates in
   app.get(
@@ -61,28 +63,28 @@ export default async function escrowRoutes(app: FastifyInstance) {
     h.getByCode,
   )
 
-  // Fund — Payer deposits money, transitions escrow to Funded
+  // Fund — Payer deposits money via payment provider checkout
   app.post(
     '/:id/fund',
-    { ...auth, config: { rateLimit: { max: 10, timeWindow: '1 minute' } } },
+    { ...financialAuth, config: { rateLimit: { max: 10, timeWindow: '1 minute' } } },
     h.fund,
   )
 
   // Release — Payer approves delivery, releases funds to Payee
   app.post(
     '/:id/release',
-    { ...auth, config: { rateLimit: { max: 10, timeWindow: '1 minute' } } },
+    { ...financialAuth, config: { rateLimit: { max: 10, timeWindow: '1 minute' } } },
     h.release,
   )
 
-  // Refund — return funds to Payer (mutual agreement or admin decision)
+  // Refund — return funds to Payer (platform review concluded — AwaitingAction only)
   app.post(
     '/:id/refund',
-    { ...auth, config: { rateLimit: { max: 10, timeWindow: '1 minute' } } },
+    { ...financialAuth, config: { rateLimit: { max: 10, timeWindow: '1 minute' } } },
     h.refund,
   )
 
-  // Cancel — cancel before funding
+  // Cancel — cancel before funding (creator only)
   app.post(
     '/:id/cancel',
     { ...auth, config: { rateLimit: { max: 10, timeWindow: '1 minute' } } },
@@ -92,14 +94,14 @@ export default async function escrowRoutes(app: FastifyInstance) {
   // Open a dispute on a funded escrow
   app.post(
     '/:id/dispute',
-    { ...auth, config: { rateLimit: { max: 5, timeWindow: '1 minute' } } },
+    { ...financialAuth, config: { rateLimit: { max: 5, timeWindow: '1 minute' } } },
     h.openDispute,
   )
 
-  // Resolve an open dispute
+  // Resolve an open dispute (other party must accept)
   app.post(
     '/disputes/:id/resolve',
-    { ...auth, config: { rateLimit: { max: 10, timeWindow: '1 minute' } } },
+    { ...financialAuth, config: { rateLimit: { max: 10, timeWindow: '1 minute' } } },
     h.resolveDispute,
   )
 
@@ -113,7 +115,7 @@ export default async function escrowRoutes(app: FastifyInstance) {
   // Milestone: Payer approves submitted work, triggers partial release
   app.post(
     '/:id/milestones/:milestoneId/approve',
-    { ...auth, config: { rateLimit: { max: 20, timeWindow: '1 minute' } } },
+    { ...financialAuth, config: { rateLimit: { max: 20, timeWindow: '1 minute' } } },
     h.approveMilestone,
   )
 

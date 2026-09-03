@@ -58,19 +58,27 @@ export enum LedgerEntryType {
   Fee     = 'Fee',     // Platform fee deducted
 }
 
-// Payer can fund from Created OR AwaitingPayment — both paths lead to Funded.
-// AwaitingPayment exists for cases where the payer signals intent (link shared)
-// before the actual Paystack payment completes.
+// ── State machine ─────────────────────────────────────────────────────────────
+//
+// Funded is a transient state set by the payment worker the moment a payment
+// is confirmed. The worker immediately transitions to Held in the same DB
+// transaction, so the escrow never rests in Funded from an application
+// perspective. Funded is kept in the enum for audit/ledger purposes.
+//
+// Refund path requires a dispute first (Held → Disputed → Refunded via
+// resolveDispute) or platform review (Held → AwaitingAction → Refunded).
+// Neither party can unilaterally refund a funded escrow.
 export const VALID_TRANSITIONS: Record<EscrowStatus, EscrowStatus[]> = {
   [EscrowStatus.Created]:         [EscrowStatus.AwaitingPayment, EscrowStatus.Funded, EscrowStatus.Cancelled],
   [EscrowStatus.AwaitingPayment]: [EscrowStatus.Funded, EscrowStatus.Cancelled],
-  [EscrowStatus.Funded]:          [EscrowStatus.Held, EscrowStatus.Refunded],
+  // Payment worker atomically transitions Funded → Held — no other code moves from Funded
+  [EscrowStatus.Funded]:          [EscrowStatus.Held],
   [EscrowStatus.Held]: [
     EscrowStatus.AwaitingAction,
     EscrowStatus.Released,
-    EscrowStatus.Refunded,
     EscrowStatus.Disputed,
   ],
+  // AwaitingAction = platform review in progress; can resolve either way
   [EscrowStatus.AwaitingAction]: [
     EscrowStatus.Released,
     EscrowStatus.Refunded,
@@ -78,6 +86,7 @@ export const VALID_TRANSITIONS: Record<EscrowStatus, EscrowStatus[]> = {
   ],
   [EscrowStatus.Released]:  [],
   [EscrowStatus.Refunded]:  [],
+  // Disputed → Released or Refunded via resolveDispute (other party must agree)
   [EscrowStatus.Disputed]:  [EscrowStatus.Released, EscrowStatus.Refunded],
   [EscrowStatus.Cancelled]: [],
 }

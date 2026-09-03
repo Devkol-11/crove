@@ -1,7 +1,7 @@
 import type { DomainEvent } from '../../../../shared/base/DomainEvent'
 
 export class EmailVerifiedEvent implements DomainEvent {
-  readonly eventType     = 'auth.email_verified'
+  readonly eventType     = 'user.email_verified'
   readonly aggregateType = 'User'
   readonly occurredAt    = new Date()
 

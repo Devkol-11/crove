@@ -1,9 +1,11 @@
 import Fastify from 'fastify'
 import type { FastifyInstance } from 'fastify'
 import { fromNodeHeaders } from 'better-auth/node'
+import { ZodError } from 'zod'
 import { env } from './config'
 import { auth } from './lib/auth'
 import { log } from './lib/logger'
+import { PaymentError } from './third_party/payment_providers/payment.error'
 
 const authLog = log.auth
 
@@ -16,6 +18,37 @@ export async function buildApp(): Promise<FastifyInstance> {
           ? { target: 'pino-pretty', options: { colorize: true } }
           : undefined,
     },
+  })
+
+  // Catch ZodError thrown by schema.parse() in controllers and return a clean 422.
+  // All other errors (HTTP errors from sensible, unknown errors) fall through to
+  // Fastify's default handler which already handles them correctly.
+  app.setErrorHandler((error, _request, reply) => {
+    if (error instanceof ZodError) {
+      return reply.code(422).send({
+        statusCode: 422,
+        error: 'Validation Error',
+        message: 'Invalid request data.',
+        issues: error.issues.map((issue) => ({
+          field: issue.path.length ? issue.path.join('.') : 'body',
+          message: issue.message,
+        })),
+      })
+    }
+
+    if (error instanceof PaymentError) {
+      log.config.error(
+        { provider: error.provider, statusCode: error.statusCode, body: error.providerBody },
+        error.message,
+      )
+      return reply.code(502).send({
+        statusCode: 502,
+        error: 'Payment Provider Error',
+        message: 'We were unable to process your payment at this time. Please try again in a moment.',
+      })
+    }
+
+    reply.send(error)
   })
 
   // Infrastructure plugins (order matters — db/redis before auth, auth before routes)
@@ -96,11 +129,11 @@ export async function buildApp(): Promise<FastifyInstance> {
   // Application routes
   await app.register(import('./modules/users/users.routes'), { prefix: '/api/users' })
   await app.register(import('./modules/escrow/escrow.routes'), { prefix: '/api/escrow' })
+  await app.register(import('./modules/webhooks/webhook.routes'), { prefix: '/api/webhooks' })
 
   app.get('/health', async () => ({
     status: 'ok',
     timestamp: new Date().toISOString(),
-    env: env.NODE_ENV,
   }))
 
   return app

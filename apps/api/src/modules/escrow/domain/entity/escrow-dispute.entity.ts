@@ -56,12 +56,6 @@ export class EscrowDisputeEntity extends Entity<string> {
     return this.isOpen() || this.isUnderReview()
   }
 
-  // ── Business rule assertions ─────────────────────────────────────────────
-  //
-  // Each method throws a plain Error if the precondition is not met.
-  // The escrow service catches these and re-throws as Fastify HTTP errors
-  // (400 bad request), keeping HTTP concerns out of the domain.
-
   assertCanMarkUnderReview(): void {
     if (!this.isOpen()) {
       throw new DisputeInvalidTransitionError(
@@ -80,14 +74,18 @@ export class EscrowDisputeEntity extends Entity<string> {
 
   assertCanClose(): void {
     if (!this.isResolved()) {
-      throw new DisputeInvalidTransitionError(`Dispute cannot be closed from '${this.status}'. Resolve it before closing.`)
+      throw new DisputeInvalidTransitionError(
+        `Dispute cannot be closed from '${this.status}'. Resolve it before closing.`,
+      )
     }
   }
 
   // Ensures only the party who raised the dispute can take owner-only actions.
   assertIsRaisedBy(userId: string): void {
     if (this.raisedById !== userId) {
-      throw new DisputeOwnershipError('Only the user who raised this dispute can perform this action.')
+      throw new DisputeOwnershipError(
+        'Only the user who raised this dispute can perform this action.',
+      )
     }
   }
 }

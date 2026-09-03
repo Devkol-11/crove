@@ -12,6 +12,15 @@ type DbTx = Omit<
 
 const generateCode = customAlphabet('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', 6)
 
+async function generateUniqueCode(tx: DbTx): Promise<string> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const code = generateCode()
+    const existing = await tx.escrow.findUnique({ where: { code }, select: { id: true } })
+    if (!existing) return code
+  }
+  throw new Error('Failed to generate a unique escrow code after 5 attempts')
+}
+
 function paymentLink(code: string): string {
   return `${env.FRONTEND_URL}/e/${code}`
 }
@@ -28,7 +37,7 @@ export async function createStandardEscrow(
   creatorId: string,
   input: Extract<CreateEscrowInput, { type: EscrowType.Standard }>,
 ) {
-  const code = generateCode()
+  const code = await generateUniqueCode(tx)
   const escrow = await tx.escrow.create({
     data: {
       code,
@@ -55,7 +64,7 @@ export async function createMilestoneEscrow(
   creatorId: string,
   input: Extract<CreateEscrowInput, { type: EscrowType.Milestone }>,
 ) {
-  const code = generateCode()
+  const code = await generateUniqueCode(tx)
   const totalAmount = input.milestones.reduce((sum, m) => sum + m.amount, 0)
   const escrow = await tx.escrow.create({
     data: {
@@ -92,7 +101,7 @@ export async function createConditionalEscrow(
   creatorId: string,
   input: Extract<CreateEscrowInput, { type: EscrowType.Conditional }>,
 ) {
-  const code = generateCode()
+  const code = await generateUniqueCode(tx)
   const escrow = await tx.escrow.create({
     data: {
       code,
@@ -120,7 +129,7 @@ export async function createDepositEscrow(
   creatorId: string,
   input: Extract<CreateEscrowInput, { type: EscrowType.Deposit }>,
 ) {
-  const code = generateCode()
+  const code = await generateUniqueCode(tx)
   const escrow = await tx.escrow.create({
     data: {
       code,
@@ -144,7 +153,7 @@ export async function createDepositEscrow(
 // Always Standard type. Creator identified by name + email only.
 
 export async function createQuickLinkEscrow(tx: DbTx, input: CreateQuickEscrowInput) {
-  const code = generateCode()
+  const code = await generateUniqueCode(tx)
   const escrow = await tx.escrow.create({
     data: {
       code,
@@ -159,10 +168,14 @@ export async function createQuickLinkEscrow(tx: DbTx, input: CreateQuickEscrowIn
       expiresAt:   new Date(Date.now() + input.expiresInDays * 24 * 60 * 60 * 1000),
       participants: {
         create: {
-          userId: null,
-          name:   input.creatorName,
-          email:  input.creatorEmail,
-          role:   input.creatorRole,
+          userId:        null,
+          name:          input.creatorName,
+          email:         input.creatorEmail,
+          role:          input.creatorRole,
+          accountNumber: input.payeeAccount?.accountNumber,
+          bankCode:      input.payeeAccount?.bankCode,
+          bankName:      input.payeeAccount?.bankName,
+          accountName:   input.payeeAccount?.accountName,
         },
       },
     },

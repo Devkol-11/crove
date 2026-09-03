@@ -1,7 +1,7 @@
 import type { DomainEvent } from '../../../../shared/base/DomainEvent'
 
 export class UserRegisteredEvent implements DomainEvent {
-  readonly eventType    = 'auth.user_registered'
+  readonly eventType    = 'user.registered'
   readonly aggregateType = 'User'
   readonly occurredAt   = new Date()
 

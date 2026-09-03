@@ -2,6 +2,7 @@ import type { DomainEvent } from '../shared/base/DomainEvent'
 import { getQueues } from '../queues'
 import { log } from './logger'
 
+// Events routed to the escrow worker (timers, payouts, dispute flagging)
 const ESCROW_WORKER_EVENTS = new Set([
   'escrow.created',
   'escrow.funded',
@@ -11,6 +12,7 @@ const ESCROW_WORKER_EVENTS = new Set([
   'milestone.approved',
 ])
 
+// Events routed to the notifications worker (emails, push notifications)
 const NOTIFICATION_WORKER_EVENTS = new Set([
   'user.registered',
   'user.email_verified',

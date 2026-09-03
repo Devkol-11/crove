@@ -18,6 +18,34 @@ const envSchema = z.object({
   // Get these from https://console.cloud.google.com → APIs & Services → Credentials
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),
+  BACHS_TEST_KEY: z.string().optional(),
+  BACHS_LIVE_KEY: z.string().optional(),
+  // Per-endpoint signing secret from Bachs Developer Portal → Webhooks.
+  // Separate from the API key — used to verify HMAC-SHA256 webhook signatures.
+  BACHS_WEBHOOK_SECRET: z.string().optional(),
+  ACTIVE_PAYMENT_PROVIDER: z.string(),
+  PAYSTACK_SECRET_KEY: z.string().optional(),
+  ACTIVE_EMAIL_PROVIDER: z.string(),
+  RESEND_API_KEY: z.string().optional(),
+  SENDBYTE_API_KEY: z.string().optional(),
+  EMAIL_FROM_ADDRESS: z.string().default('onboarding@resend.dev'),
+  // Redirect OTP emails to this address in non-production environments
+  DEV_OTP_EMAIL: z.string().email().optional(),
+}).superRefine((data, ctx) => {
+  if (data.ACTIVE_EMAIL_PROVIDER === 'resend' && !data.RESEND_API_KEY) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['RESEND_API_KEY'],
+      message: 'RESEND_API_KEY is required when ACTIVE_EMAIL_PROVIDER=resend',
+    })
+  }
+  if (data.ACTIVE_EMAIL_PROVIDER === 'sendbyte' && !data.SENDBYTE_API_KEY) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['SENDBYTE_API_KEY'],
+      message: 'SENDBYTE_API_KEY is required when ACTIVE_EMAIL_PROVIDER=sendbyte',
+    })
+  }
 })
 
 export type Env = z.infer<typeof envSchema>

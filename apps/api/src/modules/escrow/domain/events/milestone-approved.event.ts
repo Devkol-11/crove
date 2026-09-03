@@ -1,7 +1,7 @@
 import type { DomainEvent } from '../../../../shared/base/DomainEvent'
 
 export class MilestoneApprovedEvent implements DomainEvent {
-  readonly eventType = 'escrow.milestone_approved'
+  readonly eventType = 'milestone.approved'
   readonly aggregateType = 'Escrow'
   readonly occurredAt = new Date()
 

@@ -11,3 +11,7 @@ export class EscrowUnsupportedCurrencyError extends DomainValidationError {
 export class MilestoneDeadlinePastError extends DomainValidationError {
   readonly code = 'MILESTONE_DEADLINE_PAST'
 }
+
+export class MilestoneTotalExceedsLimitError extends DomainValidationError {
+  readonly code = 'MILESTONE_TOTAL_EXCEEDS_LIMIT'
+}

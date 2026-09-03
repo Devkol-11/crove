@@ -1,12 +1,24 @@
 import { z } from 'zod'
-import { EscrowType, EscrowStatus, EscrowRole } from './escrow.types'
+import { EscrowType, EscrowRole } from './escrow.types'
+
+// ₦100M / $100k — absolute ceiling per escrow transaction
+const MAX_ESCROW_AMOUNT = 100_000_000
 
 // ── Shared sub-schemas ────────────────────────────────────────────────────────
+
+export const payeeAccountSchema = z.object({
+  accountNumber: z.string().regex(/^\d{10}$/, 'Account number must be exactly 10 digits'),
+  bankCode:      z.string().min(1, 'Bank code is required'),
+  bankName:      z.string().min(1, 'Bank name is required'),
+  accountName:   z.string().min(1, 'Account name is required'),
+})
+
+export type PayeeAccountInput = z.infer<typeof payeeAccountSchema>
 
 const milestoneInputSchema = z.object({
   title:       z.string().min(1),
   description: z.string().optional(),
-  amount:      z.number().positive(),
+  amount:      z.number().positive().max(MAX_ESCROW_AMOUNT, `Milestone amount cannot exceed ${MAX_ESCROW_AMOUNT}`),
   deadline:    z.string().datetime().optional(),
 })
 
@@ -21,7 +33,7 @@ export const createEscrowSchema = z.discriminatedUnion('type', [
     type:           z.literal(EscrowType.Standard),
     title:          z.string().min(1),
     description:    z.string().optional(),
-    amount:         z.number().positive(),
+    amount:         z.number().positive().max(MAX_ESCROW_AMOUNT, `Amount cannot exceed ${MAX_ESCROW_AMOUNT}`),
     currency:       z.string().default('NGN'),
     creatorRole:    creatorRoleSchema,
     expiresInDays:  z.number().int().min(1).max(365).optional(),
@@ -34,14 +46,16 @@ export const createEscrowSchema = z.discriminatedUnion('type', [
     currency:       z.string().default('NGN'),
     creatorRole:    creatorRoleSchema,
     expiresInDays:  z.number().int().min(1).max(365).optional(),
-    milestones:     z.array(milestoneInputSchema).min(1),
+    milestones:     z.array(milestoneInputSchema).min(1).max(20),
     recipientEmail: z.string().email().optional(),
+    // Milestone total is validated in EscrowAggregate.assertValidCreationInput
+    // since discriminatedUnion members cannot be ZodEffects (superRefine result)
   }),
   z.object({
     type:             z.literal(EscrowType.Conditional),
     title:            z.string().min(1),
     description:      z.string().optional(),
-    amount:           z.number().positive(),
+    amount:           z.number().positive().max(MAX_ESCROW_AMOUNT, `Amount cannot exceed ${MAX_ESCROW_AMOUNT}`),
     currency:         z.string().default('NGN'),
     creatorRole:      creatorRoleSchema,
     expiresInDays:    z.number().int().min(1).max(365).optional(),
@@ -52,7 +66,7 @@ export const createEscrowSchema = z.discriminatedUnion('type', [
     type:           z.literal(EscrowType.Deposit),
     title:          z.string().min(1),
     description:    z.string().optional(),
-    amount:         z.number().positive(),
+    amount:         z.number().positive().max(MAX_ESCROW_AMOUNT, `Amount cannot exceed ${MAX_ESCROW_AMOUNT}`),
     currency:       z.string().default('NGN'),
     creatorRole:    creatorRoleSchema,
     expiresInDays:  z.number().int().min(1).max(365).optional(),
@@ -63,17 +77,25 @@ export const createEscrowSchema = z.discriminatedUnion('type', [
 export type CreateEscrowInput = z.infer<typeof createEscrowSchema>
 
 // ── Quick link escrow creation (no auth required) ─────────────────────────────
-// Always Standard type. Creator declares whether they are the Payer or Payee.
 
 export const createQuickEscrowSchema = z.object({
   title:         z.string().min(1, 'Title is required'),
   description:   z.string().optional(),
-  amount:        z.number().positive('Amount must be positive'),
+  amount:        z.number().positive('Amount must be positive').max(MAX_ESCROW_AMOUNT, `Amount cannot exceed ${MAX_ESCROW_AMOUNT}`),
   currency:      z.string().default('NGN'),
   creatorName:   z.string().min(1, 'Your name is required'),
   creatorEmail:  z.string().email('A valid email is required'),
   creatorRole:   creatorRoleSchema,
   expiresInDays: z.number().int().min(1).max(90).default(7),
+  payeeAccount:  payeeAccountSchema.optional(),
+}).superRefine((data, ctx) => {
+  if (data.creatorRole === EscrowRole.Payee && !data.payeeAccount) {
+    ctx.addIssue({
+      code:    z.ZodIssueCode.custom,
+      path:    ['payeeAccount'],
+      message: 'Your bank account details are required when you are the Payee.',
+    })
+  }
 })
 
 export type CreateQuickEscrowInput = z.infer<typeof createQuickEscrowSchema>
@@ -88,8 +110,9 @@ export const joinRequestSchema = z.object({
 export type JoinRequestInput = z.infer<typeof joinRequestSchema>
 
 export const joinVerifySchema = z.object({
-  email: z.string().email(),
-  otp:   z.string().length(6, 'OTP must be 6 digits'),
+  email:        z.string().email(),
+  otp:          z.string().length(6, 'OTP must be 6 digits'),
+  payeeAccount: payeeAccountSchema.optional(),
 })
 
 export type JoinVerifyInput = z.infer<typeof joinVerifySchema>
@@ -103,6 +126,10 @@ export type OpenDisputeInput = z.infer<typeof openDisputeSchema>
 
 export const resolveDisputeSchema = z.object({
   resolution: z.string().min(10, 'Please provide a detailed resolution (min 10 characters)'),
+  // The resolving party must commit to an outcome — no ambiguous resolutions
+  decision:   z.enum(['release', 'refund'], {
+    errorMap: () => ({ message: "Decision must be 'release' (release funds to payee) or 'refund' (return funds to payer)" }),
+  }),
 })
 export type ResolveDisputeInput = z.infer<typeof resolveDisputeSchema>
 
@@ -117,3 +144,11 @@ export const approveMilestoneSchema = z.object({
   milestoneId: z.string().cuid(),
 })
 export type ApproveMilestoneInput = z.infer<typeof approveMilestoneSchema>
+
+// ── Pagination ────────────────────────────────────────────────────────────────
+
+export const paginationSchema = z.object({
+  page:  z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+})
+export type PaginationInput = z.infer<typeof paginationSchema>

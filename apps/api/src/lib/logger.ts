@@ -33,5 +33,6 @@ export const log = {
     notifications: logger.child({ module: 'worker:notifications' }),
     escrow:        logger.child({ module: 'worker:escrow' }),
     auth:          logger.child({ module: 'worker:auth' }),
+    payment:       logger.child({ module: 'worker:payment' }),
   },
 }
