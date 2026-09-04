@@ -40,14 +40,30 @@ export class EscrowAggregate extends AggregateRoot<string> {
     return new EscrowAggregate(data, data)
   }
 
-  get code(): string { return this.props.code }
-  get title(): string { return this.props.title }
-  get type(): EscrowType { return this.props.type as EscrowType }
-  get status(): EscrowStatus { return this.props.status as EscrowStatus }
-  get amount(): number { return Number(this.props.amount) }
-  get currency(): string { return this.props.currency }
-  get creatorId(): string | null { return this.props.creatorId }
-  get releaseCondition(): string | null { return this.props.releaseCondition }
+  get code(): string {
+    return this.props.code
+  }
+  get title(): string {
+    return this.props.title
+  }
+  get type(): EscrowType {
+    return this.props.type as EscrowType
+  }
+  get status(): EscrowStatus {
+    return this.props.status as EscrowStatus
+  }
+  get amount(): number {
+    return Number(this.props.amount)
+  }
+  get currency(): string {
+    return this.props.currency
+  }
+  get creatorId(): string | null {
+    return this.props.creatorId
+  }
+  get releaseCondition(): string | null {
+    return this.props.releaseCondition
+  }
 
   // ── State machine ─────────────────────────────────────────────────────────
 
@@ -58,16 +74,16 @@ export class EscrowAggregate extends AggregateRoot<string> {
   assertCanTransitionTo(next: EscrowStatus): void {
     if (!this.canTransitionTo(next)) {
       const validNext: Record<string, string> = {
-        Created:         'AwaitingPayment, Funded, Cancelled',
+        Created: 'AwaitingPayment, Funded, Cancelled',
         AwaitingPayment: 'Funded, Cancelled',
-        Funded:          'Held (auto-transition only — handled by payment worker)',
-        Held:            'AwaitingAction, Released, Disputed',
-        AwaitingAction:  'Released, Refunded, Disputed',
-        Disputed:        'Released, Refunded (via dispute resolution)',
+        Funded: 'Held (auto-transition only — handled by payment worker)',
+        Held: 'AwaitingAction, Released, Disputed',
+        AwaitingAction: 'Released, Refunded, Disputed',
+        Disputed: 'Released, Refunded (via dispute resolution)',
       }
       throw new EscrowInvalidTransitionError(
         `Escrow "${this.code}" cannot move from '${this.status}' to '${next}'. ` +
-        `Valid next states: [${validNext[this.status] ?? 'none — this is a terminal state'}]`,
+          `Valid next states: [${validNext[this.status] ?? 'none — this is a terminal state'}]`,
       )
     }
   }
@@ -80,9 +96,7 @@ export class EscrowAggregate extends AggregateRoot<string> {
 
   getRoleForUser(userId: string, userEmail?: string): EscrowRole | null {
     const participant = this.participants.find(
-      (p) =>
-        p.userId === userId ||
-        (p.userId === null && !!userEmail && p.email === userEmail),
+      (p) => p.userId === userId || (p.userId === null && !!userEmail && p.email === userEmail),
     )
     return participant ? (participant.role as EscrowRole) : null
   }
@@ -93,9 +107,7 @@ export class EscrowAggregate extends AggregateRoot<string> {
 
   isParticipant(userId: string, userEmail?: string): boolean {
     return this.participants.some(
-      (p) =>
-        p.userId === userId ||
-        (p.userId === null && !!userEmail && p.email === userEmail),
+      (p) => p.userId === userId || (p.userId === null && !!userEmail && p.email === userEmail),
     )
   }
 

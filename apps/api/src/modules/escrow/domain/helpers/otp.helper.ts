@@ -1,88 +1,76 @@
-import type { PrismaClient } from '@prisma/client'
+import type { Redis } from 'ioredis'
 import { customAlphabet } from 'nanoid'
 import { sendEmail } from '../../../../third_party/email_providers'
 import { otpJoinTemplate } from '../../../../config/email/templates/otp-join.template'
 import { log } from '../../../../lib/logger'
 import { env } from '../../../../config'
 
-const generateOtp = customAlphabet('0123456789', 6)
-const OTP_TTL_MS = 10 * 60 * 1000 // 10 minutes
-const OTP_TTL_MINUTES = 10
+const generateOtp    = customAlphabet('0123456789', 6)
+const OTP_TTL_SEC    = 10 * 60  // 10 minutes
+const OTP_TTL_MIN    = 10
+
+interface StoredJoinOtp { name: string; email: string; code: string }
+
+const joinOtpKey = (escrowId: string, email: string) => `crove:jotp:${escrowId}:${email}`
 
 export async function createJoinOtp(
-  db: PrismaClient,
+  redis: Redis,
   escrowId: string,
   name: string,
   email: string,
+  escrowTitle: string,
 ) {
-  // Invalidate any existing unused OTPs for this email + escrow
-  await db.escrowJoinOtp.updateMany({
-    where: { escrowId, email, usedAt: null },
-    data: { usedAt: new Date() },
-  })
-
   const code = generateOtp()
-  const expiresAt = new Date(Date.now() + OTP_TTL_MS)
 
-  const otp = await db.escrowJoinOtp.create({
-    data: { escrowId, name, email, code, expiresAt },
-  })
+  // Overwrite any existing OTP for this email+escrow — single active OTP per pair
+  await redis.setex(joinOtpKey(escrowId, email), OTP_TTL_SEC, JSON.stringify({ name, email, code }))
 
-  // Fetch escrow title for the email
-  const escrow = await db.escrow.findUnique({
-    where: { id: escrowId },
-    select: { title: true },
-  })
+  const isDev = env.NODE_ENV !== 'production'
 
-  const deliverTo = env.NODE_ENV !== 'production' && env.DEV_OTP_EMAIL ? env.DEV_OTP_EMAIL : email
+  if (isDev) {
+    log.auth.info(
+      { escrowId, email, code, expiresInMinutes: OTP_TTL_MIN },
+      'JOIN OTP — use this code to verify (dev)',
+    )
+  }
+
+  if (isDev && !env.DEV_OTP_EMAIL) return { name, email, code }
+
+  const deliverTo = isDev && env.DEV_OTP_EMAIL ? env.DEV_OTP_EMAIL : email
 
   try {
     await sendEmail({
       to: deliverTo,
       ...otpJoinTemplate({
-        recipientName: name,
+        recipientName:    name,
         code,
-        escrowTitle: escrow?.title ?? 'your escrow',
-        expiresInMinutes: OTP_TTL_MINUTES,
+        escrowTitle,
+        expiresInMinutes: OTP_TTL_MIN,
       }),
     })
   } catch (err) {
-    // Email failure must not block the OTP creation — log and continue
     log.auth.error(
-      { escrowId, email, err: (err as Error).message },
-      'OTP email delivery failed — code was still created',
+      { escrowId, email, deliverTo, err: (err as Error).message },
+      'OTP email delivery failed — code was still created and logged',
     )
-    // In dev, always log the code as a fallback
-    if (process.env.NODE_ENV !== 'production') {
-      log.auth.info({ escrowId, email, code }, 'join OTP (dev fallback)')
-    }
   }
 
-  return otp
+  return { name, email, code }
 }
 
 export async function verifyJoinOtp(
-  db: PrismaClient,
+  redis: Redis,
   escrowId: string,
   email: string,
   code: string,
 ) {
-  const otp = await db.escrowJoinOtp.findFirst({
-    where: {
-      escrowId,
-      email,
-      code,
-      usedAt: null,
-      expiresAt: { gt: new Date() },
-    },
-  })
+  const key = joinOtpKey(escrowId, email)
+  const raw = await redis.get(key)
+  if (!raw) return null
 
-  if (!otp) return null
+  const stored = JSON.parse(raw) as StoredJoinOtp
+  if (stored.code !== code) return null
 
-  await db.escrowJoinOtp.update({
-    where: { id: otp.id },
-    data: { usedAt: new Date() },
-  })
-
-  return otp
+  await redis.del(key)  // single-use — consumed on success
+  return stored
 }

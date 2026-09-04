@@ -1,15 +1,46 @@
+import crypto from 'node:crypto'
 import { Worker } from 'bullmq'
 import type Redis from 'ioredis'
 import { QUEUE_NAMES, getQueues } from '../index'
 import type { DomainEvent } from '../../shared/base/DomainEvent'
 import type { EscrowFundedEvent } from '../../modules/escrow/domain/events/escrow-funded.event'
 import type { MilestoneSubmittedEvent } from '../../modules/escrow/domain/events/milestone-submitted.event'
+import type { MilestoneApprovedEvent } from '../../modules/escrow/domain/events/milestone-approved.event'
+import { EscrowRole } from '../../modules/escrow/escrow.types'
+import { PAYOUT_JOBS } from './payout.worker'
 import { db } from '../../lib/prisma'
 import { log } from '../../lib/logger'
 
 const workerLog = log.worker.escrow
 
 const DAY_MS = 24 * 60 * 60 * 1000
+
+// ── Payout helper ─────────────────────────────────────────────────────────────
+
+async function enqueuePayout(
+  escrowId: string,
+  participants: Array<{ role: string; bachsAccountId?: string | null }>,
+  amount: number,
+  currency: string,
+  milestoneId?: string,
+) {
+  const payee = participants.find((p) => p.role === EscrowRole.Payee)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const bachsAccountId = (payee as any)?.bachsAccountId as string | null | undefined
+  if (!bachsAccountId) {
+    workerLog.warn({ escrowId, milestoneId }, 'payee has no Bachs account — payout skipped')
+    return
+  }
+  const { payoutQueue } = getQueues()
+  const suffix = milestoneId ?? escrowId
+  const ref = `PAYOUT-${suffix.slice(0, 8).toUpperCase()}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`
+  await payoutQueue?.add(
+    PAYOUT_JOBS.PROCESS_PAYOUT,
+    { escrowId, payeeAccountId: bachsAccountId, amount, currency, reference: ref, ...(milestoneId ? { milestoneId } : {}) },
+    { jobId: milestoneId ? `payout-milestone-${milestoneId}` : `payout-${escrowId}` },
+  )
+  workerLog.info({ escrowId, bachsAccountId, amount, milestoneId }, 'payout job enqueued')
+}
 
 export const ESCROW_JOBS = {
   EXPIRE_ESCROW:             'escrow.expire',
@@ -38,7 +69,10 @@ async function handleExpireEscrow({ escrowId }: ExpireEscrowPayload) {
 }
 
 async function handleAutoReleaseEscrow({ escrowId }: AutoReleaseEscrowPayload) {
-  const escrow = await db.escrow.findUnique({ where: { id: escrowId } })
+  const escrow = await db.escrow.findUnique({
+    where: { id: escrowId },
+    include: { participants: true },
+  })
   if (!escrow) return
 
   // Only auto-release if still in a held state — payer may have already released.
@@ -62,7 +96,7 @@ async function handleAutoReleaseEscrow({ escrowId }: AutoReleaseEscrowPayload) {
     data:  { status: 'Released', releasedAt: new Date() },
   })
   workerLog.info({ escrowId, code: escrow.code }, 'escrow auto-released after deadline')
-  // TODO: trigger Paystack payout to payee's bank account
+  await enqueuePayout(escrowId, escrow.participants, Number(escrow.amount), escrow.currency)
 }
 
 async function handleMilestoneReviewTimeout({ escrowId, milestoneId }: MilestoneReviewPayload) {
@@ -106,7 +140,14 @@ async function handleEscrowReleased(event: DomainEvent) {
   const { escrowQueue } = getQueues()
   await escrowQueue?.remove(`auto-release:${event.aggregateId}`)
   workerLog.info({ escrowId: event.aggregateId }, 'auto-release job cancelled — escrow released manually')
-  // TODO: trigger Paystack payout to payee's bank account
+
+  const escrow = await db.escrow.findUnique({
+    where: { id: event.aggregateId },
+    include: { participants: true },
+  })
+  if (escrow) {
+    await enqueuePayout(escrow.id, escrow.participants, Number(escrow.amount), escrow.currency)
+  }
 }
 
 async function handleEscrowDisputed(event: DomainEvent) {
@@ -134,11 +175,18 @@ async function handleMilestoneSubmitted(event: DomainEvent) {
 
 async function handleMilestoneApproved(event: DomainEvent) {
   // Cancel the review-timeout job — payer already approved
-  const e = event as MilestoneSubmittedEvent
+  const e = event as MilestoneApprovedEvent
   const { escrowQueue } = getQueues()
   await escrowQueue?.remove(`review-timeout:${e.milestoneId}`)
   workerLog.info({ milestoneId: e.milestoneId }, 'review-timeout job cancelled — milestone approved')
-  // TODO: trigger partial Paystack payout for this milestone
+
+  const escrow = await db.escrow.findUnique({
+    where: { id: e.aggregateId },
+    include: { participants: true },
+  })
+  if (escrow) {
+    await enqueuePayout(e.aggregateId, escrow.participants, e.amount, e.currency, e.milestoneId)
+  }
 }
 
 // ── Worker ────────────────────────────────────────────────────────────────────

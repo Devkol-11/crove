@@ -5,8 +5,8 @@ import { env } from '../config'
 import { eventDispatcher } from './event-dispatcher'
 import { UserRegisteredEvent } from '../modules/auth/domain/events/user-registered.event'
 import { EmailVerifiedEvent } from '../modules/auth/domain/events/email-verified.event'
-import { getQueues } from '../queues'
-import { AUTH_JOBS } from '../queues/workers/auth.worker'
+import { getQueues } from '../pub_sub'
+import { AUTH_JOBS } from '../pub_sub/workers/auth.worker'
 
 export const auth = betterAuth({
   // The public URL of this API server.
@@ -46,11 +46,11 @@ export const auth = betterAuth({
     : {}),
 
   session: {
-    expiresIn:  60 * 60 * 24 * 7, // 7 days — how long a session lives
-    updateAge:  60 * 60 * 24,     // 1 day  — refresh silently when this close to expiry
+    expiresIn: 60 * 60 * 24 * 7, // 7 days — how long a session lives
+    updateAge: 60 * 60 * 24, // 1 day  — refresh silently when this close to expiry
     cookieCache: {
       enabled: true,
-      maxAge:  5 * 60,            // 5 min  — client-side cache to reduce DB reads
+      maxAge: 5 * 60, // 5 min  — client-side cache to reduce DB reads
     },
   },
 
@@ -61,7 +61,7 @@ export const auth = betterAuth({
   user: {
     additionalFields: {
       firstName: { type: 'string', required: false },
-      lastName:  { type: 'string', required: false },
+      lastName: { type: 'string', required: false },
       // phone is intentionally excluded — it is a profile field set via
       // PATCH /api/users/profile, not a sign-up field. Including it here
       // would let Better Auth pass it during user.create and trigger a
@@ -80,9 +80,7 @@ export const auth = betterAuth({
         // We raise UserRegisteredEvent so any subscriber (email welcome,
         // analytics, onboarding flow) can react without coupling to this file.
         after: async (user) => {
-          await eventDispatcher.dispatch(
-            new UserRegisteredEvent(user.id, user.email, user.name),
-          )
+          await eventDispatcher.dispatch(new UserRegisteredEvent(user.id, user.email, user.name))
 
           // Guard: if account creation fails after this point (adapter error,
           // schema mismatch, network blip), the user row is left orphaned with
@@ -104,9 +102,7 @@ export const auth = betterAuth({
         // Better Auth passes the updated user object.
         after: async (user) => {
           if (user.emailVerified) {
-            await eventDispatcher.dispatch(
-              new EmailVerifiedEvent(user.id, user.email),
-            )
+            await eventDispatcher.dispatch(new EmailVerifiedEvent(user.id, user.email))
           }
         },
       },
@@ -117,4 +113,4 @@ export const auth = betterAuth({
 // Inferred types re-exported so consumers never import from better-auth directly.
 // If we swap Better Auth for something else, only this file changes.
 export type BetterAuthSession = typeof auth.$Infer.Session
-export type BetterAuthUser   = BetterAuthSession['user']
+export type BetterAuthUser = BetterAuthSession['user']

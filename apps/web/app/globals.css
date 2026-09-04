@@ -1,0 +1,107 @@
+@import "tailwindcss";
+
+@theme {
+  /* Dark (default) design tokens — Tailwind generates utilities from these */
+  --color-bg: #0b0d10;
+  --color-surface: #14171c;
+  --color-surface-line: rgba(242, 239, 233, 0.1);
+  --color-text: #f2efe9;
+  --color-text-muted: rgba(242, 239, 233, 0.65);
+  --color-accent: #ffc825;
+  --color-accent-deep: #d4a010;
+  --color-accent-soft: rgba(255, 200, 37, 0.14);
+  --font-heading: "Space Grotesk", sans-serif;
+  --font-body: "Inter", sans-serif;
+}
+
+/* Extended tokens not registered as Tailwind utilities — dark defaults */
+:root {
+  --color-accent-border: rgba(255, 200, 37, 0.28);
+  --color-accent-badge-bg: rgba(255, 200, 37, 0.18);
+  --shadow-hero-card: 0 24px 80px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(255, 255, 255, 0.04);
+  --color-nav-glass: rgba(11, 13, 16, 0.94);
+  --color-overlay: rgba(11, 13, 16, 0.65);
+}
+
+/* Light theme overrides — all semantic tokens re-defined */
+[data-theme="light"] {
+  --color-bg: #fafaf8;
+  --color-surface: #ffffff;
+  --color-surface-line: rgba(25, 40, 55, 0.1);
+  --color-text: #192837;
+  --color-text-muted: rgba(25, 40, 55, 0.65);
+  --color-accent: #d4960c;
+  --color-accent-deep: #9e6e00;
+  --color-accent-soft: rgba(212, 150, 12, 0.12);
+  --color-accent-border: rgba(212, 150, 12, 0.28);
+  --color-accent-badge-bg: rgba(212, 150, 12, 0.18);
+  --shadow-hero-card: 0 8px 40px rgba(25, 40, 55, 0.15), 0 1px 0 rgba(25, 40, 55, 0.06);
+  --color-nav-glass: rgba(250, 250, 248, 0.96);
+  --color-overlay: rgba(25, 40, 55, 0.5);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Keyboard focus visible — consistent ring using accent */
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* ─── Auth form inputs ─────────────────────────────────── */
+.auth-input {
+  width: 100%;
+  padding: 11px 14px;
+  background: transparent;
+  border: 1px solid var(--color-surface-line);
+  color: var(--color-text);
+  border-radius: 8px;
+  font-family: var(--font-body);
+  font-size: 0.875rem;
+  line-height: 1.5;
+  transition: border-color 150ms;
+  outline: none;
+  caret-color: var(--color-accent);
+}
+
+.auth-input:focus {
+  border-color: var(--color-accent);
+}
+
+.auth-input::placeholder {
+  color: var(--color-text-muted);
+}
+
+.auth-input[aria-invalid="true"] {
+  border-color: #f87171;
+}
+
+.auth-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

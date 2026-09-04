@@ -1,4 +1,5 @@
 import crypto from 'node:crypto'
+import { customAlphabet } from 'nanoid'
 import type { PrismaClient } from '@prisma/client'
 import type { FastifyInstance } from 'fastify'
 import { env } from '../../config'
@@ -12,10 +13,36 @@ import {
 import type {
   CreateEscrowInput,
   CreateQuickEscrowInput,
+  ConfirmQuickEscrowInput,
   JoinRequestInput,
   JoinVerifyInput,
   PaginationInput,
 } from './escrow.schema'
+import { sendEmail } from '../../third_party/email_providers'
+import { otpJoinTemplate } from '../../config/email/templates/otp-join.template'
+import { log } from '../../lib/logger'
+
+const generateOtp              = customAlphabet('0123456789', 6)
+const CREATION_OTP_TTL_SEC     = 10 * 60       // 10 minutes
+const ACTION_TOKEN_TTL_SEC     = 24 * 60 * 60  // 24 hours
+const JOIN_OTP_RATE_WINDOW_SEC = 5  * 60       // 5-minute rate-limit window
+
+const intentKey      = (id: string)    => `crove:intent:${id}`
+const actionTokenKey = (token: string) => `crove:atoken:${token}`
+const joinRateKey    = (escrowId: string, email: string) => `crove:jotp-rate:${escrowId}:${email}`
+
+interface StoredIntent {
+  email: string
+  data:  unknown
+  otp:   string
+}
+
+interface StoredActionToken {
+  escrowId: string
+  email:    string
+  role:     string
+  action:   string
+}
 import { EscrowAggregate } from './domain/entity/escrow.aggregate'
 import { EscrowDisputeEntity } from './domain/entity/escrow-dispute.entity'
 import { MilestoneEntity } from './domain/entity/milestone.entity'
@@ -37,15 +64,17 @@ import { createPaymentRecord } from './domain/helpers/payment.helper'
 import { eventDispatcher } from '../../lib/event-dispatcher'
 import { withDbErrorHandler } from '../../lib/db.error.handler'
 import { mapDomainError } from '../../lib/domain.error.mapper'
-import { getQueues } from '../../queues'
-import { ESCROW_JOBS } from '../../queues/workers/escrow.worker'
-import { getActivePaymentProvider } from '../../third_party/payment_providers'
+import { getQueues } from '../../pub_sub'
+import { ESCROW_JOBS } from '../../pub_sub/workers/escrow.worker'
+import { PAYOUT_JOBS } from '../../pub_sub/workers/payout.worker'
+import { getActivePaymentProvider, getBachsInstance } from '../../third_party/payment_providers'
+import type { PayeeAccountInput } from './escrow.schema'
 
 function maskEmail(email: string | null | undefined): string | null {
   if (!email) return null
   const atIndex = email.indexOf('@')
   if (atIndex < 0) return null
-  const local  = email.slice(0, atIndex)
+  const local = email.slice(0, atIndex)
   const domain = email.slice(atIndex)
   return `${local.slice(0, 2)}***${domain}`
 }
@@ -56,9 +85,7 @@ function isParticipantMatch(
   actorEmail?: string,
 ): boolean {
   return participants.some(
-    (p) =>
-      p.userId === actorId ||
-      (p.userId === null && !!actorEmail && p.email === actorEmail),
+    (p) => p.userId === actorId || (p.userId === null && !!actorEmail && p.email === actorEmail),
   )
 }
 
@@ -104,17 +131,251 @@ export class EscrowService {
     return result
   }
 
-  // ── Create Quick Link (no auth) ───────────────────────────────────────────
+  // ── Quick link creation — step 1: send creation OTP ─────────────────────
 
-  async createQuick(input: CreateQuickEscrowInput) {
+  async initiateQuick(input: CreateQuickEscrowInput) {
+    const otp      = generateOtp()
+    const intentId = crypto.randomBytes(16).toString('hex')
+
+    await this.app.redis.setex(
+      intentKey(intentId),
+      CREATION_OTP_TTL_SEC,
+      JSON.stringify({ email: input.creatorEmail, data: input, otp } satisfies StoredIntent),
+    )
+
+    const isDev = env.NODE_ENV !== 'production'
+
+    if (isDev) {
+      log.auth.info(
+        { intentId, email: input.creatorEmail, otp, expiresInMinutes: 10 },
+        'CREATION OTP — use this code to confirm your escrow (dev)',
+      )
+    }
+
+    if (!isDev || env.DEV_OTP_EMAIL) {
+      const deliverTo = isDev && env.DEV_OTP_EMAIL ? env.DEV_OTP_EMAIL : input.creatorEmail
+      try {
+        await sendEmail({
+          to: deliverTo,
+          ...otpJoinTemplate({
+            recipientName:    input.creatorName,
+            code:             otp,
+            escrowTitle:      input.title,
+            expiresInMinutes: 10,
+          }),
+        })
+      } catch (err) {
+        log.auth.error(
+          { intentId, err: (err as Error).message },
+          'Creation OTP email failed — code logged above',
+        )
+      }
+    }
+
+    return {
+      intentId,
+      message: 'OTP sent to your email. Enter it to create your escrow. Expires in 10 minutes.',
+    }
+  }
+
+  // ── Quick link creation — step 2: confirm OTP + create escrow ────────────
+
+  async confirmQuick(input: ConfirmQuickEscrowInput) {
+    const raw = await this.app.redis.get(intentKey(input.intentId))
+    if (!raw) throw this.app.httpErrors.gone('OTP has expired or does not exist — please start over')
+
+    const intent = JSON.parse(raw) as StoredIntent
+    if (intent.otp !== input.otp) throw this.app.httpErrors.badRequest('Invalid OTP code')
+
+    // Consume atomically — DEL returns 0 if another request already claimed it
+    const deleted = await this.app.redis.del(intentKey(input.intentId))
+    if (deleted === 0) throw this.app.httpErrors.gone('This OTP has already been used')
+
+    const escrowInput = intent.data as CreateQuickEscrowInput
+
     const result = await withDbErrorHandler(
-      () => this.db.$transaction((tx) => createQuickLinkEscrow(tx, input)),
+      () => this.db.$transaction((tx) => createQuickLinkEscrow(tx, escrowInput)),
       this.app,
     )
 
     await this.scheduleExpiryJob(result.escrow.id, result.escrow.expiresAt)
 
-    return result
+    // Payer-creator gets a fund token immediately — they can fund without a Crove account
+    let fundToken: string | undefined
+    if (escrowInput.creatorRole === EscrowRole.Payer) {
+      fundToken = await this.issueActionToken(
+        result.escrow.id,
+        escrowInput.creatorEmail,
+        EscrowRole.Payer,
+        'fund',
+      )
+    }
+
+    // Payee-creator: provision a Bachs Connect account so we can transfer on release
+    if (escrowInput.creatorRole === EscrowRole.Payee && escrowInput.payeeAccount) {
+      const creatorParticipant = result.escrow.participants.find((p) => p.role === EscrowRole.Payee)
+      if (creatorParticipant) {
+        const bachsAccountId = await this.initPayeeBachsAccount(
+          escrowInput.creatorEmail,
+          escrowInput.creatorName,
+          escrowInput.payeeAccount,
+          result.escrow.currency,
+        )
+        if (bachsAccountId) {
+          await this.db.escrowParticipant.update({
+            where: { id: creatorParticipant.id },
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            data: { bachsAccountId } as any,
+          })
+        }
+      }
+    }
+
+    return {
+      ...result,
+      creatorRole: escrowInput.creatorRole,
+      ...(fundToken !== undefined ? { fundToken } : {}),
+    }
+  }
+
+  // ── Fund with action token (no Crove account required) ───────────────────
+
+  async fundEscrowWithToken(escrowId: string, fundToken: string) {
+    const raw = await this.app.redis.get(actionTokenKey(fundToken))
+    if (!raw) throw this.app.httpErrors.unauthorized('Invalid or expired fund token')
+
+    const actionToken = JSON.parse(raw) as StoredActionToken
+
+    if (actionToken.escrowId !== escrowId || actionToken.action !== 'fund') {
+      throw this.app.httpErrors.unauthorized('Invalid fund token')
+    }
+    if (actionToken.role !== EscrowRole.Payer) {
+      throw this.app.httpErrors.forbidden('Only a Payer token can fund an escrow')
+    }
+
+    const payerEmail = actionToken.email
+
+    const data = await withDbErrorHandler(
+      () =>
+        this.db.escrow.findUnique({
+          where: { id: escrowId },
+          include: {
+            participants: { include: { user: { select: { email: true, name: true } } } },
+          },
+        }),
+      this.app,
+    )
+    if (!data) throw this.app.httpErrors.notFound('Escrow not found')
+
+    const escrow = EscrowAggregate.from(data)
+
+    // Match payer by the verified email on the token — userId is null for quick-link participants
+    const payerParticipant = data.participants.find(
+      (p) =>
+        p.role === EscrowRole.Payer &&
+        (p.email === payerEmail || p.user?.email === payerEmail),
+    )
+    if (!payerParticipant) {
+      throw this.app.httpErrors.forbidden('No Payer participant found matching this token')
+    }
+
+    const payeeParticipant = data.participants.find((p) => p.role === EscrowRole.Payee)
+    if (!payeeParticipant) {
+      throw this.app.httpErrors.badRequest(
+        'The payee has not joined yet — share the payment link with them first.',
+      )
+    }
+    if (!payeeParticipant.accountNumber) {
+      throw this.app.httpErrors.badRequest(
+        "The payee hasn't added their bank account details yet — funding is on hold.",
+      )
+    }
+
+    if (escrow.status !== EscrowStatus.AwaitingPayment) {
+      try {
+        escrow.assertCanTransitionTo(EscrowStatus.AwaitingPayment)
+      } catch (err) {
+        throw mapDomainError(err, this.app)
+      }
+    }
+
+    const payerName = payerParticipant.user?.name ?? payerParticipant.name ?? undefined
+
+    const reference = `ESC-${escrowId.slice(0, 8).toUpperCase()}-${crypto.randomBytes(8).toString('hex').toUpperCase()}`
+    const provider  = getActivePaymentProvider()
+
+    const payment = await withDbErrorHandler(
+      () =>
+        createPaymentRecord(this.db, {
+          escrowId,
+          reference,
+          provider:   env.ACTIVE_PAYMENT_PROVIDER,
+          amount:     escrow.amount,
+          currency:   escrow.currency,
+          payerEmail,
+        }),
+      this.app,
+    )
+
+    let initiationResult
+    try {
+      initiationResult = await provider.initiatePayment({
+        amount:       Math.round(escrow.amount * 100),
+        currency:     escrow.currency,
+        email:        payerEmail,
+        customerName: payerName,
+        reference,
+        callbackUrl:  `${env.FRONTEND_URL}/e/${escrow.code}?payment=complete`,
+        metadata:     { escrowId, payerEmail, paymentId: payment.id },
+      })
+    } catch (err) {
+      await this.db.payment.update({ where: { id: payment.id }, data: { status: 'Failed' } })
+      throw this.app.httpErrors.badGateway('Payment provider error. Please try again.')
+    }
+
+    // Token is consumed only after a successful provider response — errors above leave it intact
+    await withDbErrorHandler(
+      () =>
+        this.db.$transaction(async (tx) => {
+          await tx.payment.update({
+            where: { id: payment.id },
+            data:  {
+              authorizationUrl: initiationResult.authorizationUrl,
+              providerRef:      initiationResult.providerRef,
+            },
+          })
+
+          if (escrow.status !== EscrowStatus.AwaitingPayment) {
+            await tx.escrow.update({
+              where: { id: escrowId },
+              data:  { status: EscrowStatus.AwaitingPayment },
+            })
+          }
+
+          await createTransaction(tx, {
+            escrowId,
+            type:        TransactionType.Funding,
+            amount:      escrow.amount,
+            currency:    escrow.currency,
+            provider:    env.ACTIVE_PAYMENT_PROVIDER,
+            providerRef: reference,
+          })
+
+          await appendEscrowEvent(tx, escrowId, 'PaymentInitiated', payerEmail, {
+            reference,
+            method: 'quickFundToken',
+          })
+        }),
+      this.app,
+    )
+
+    // Consume the token after DB commits — provider already succeeded so there's no retry path
+    await this.app.redis.del(actionTokenKey(fundToken))
+
+    return {
+      paymentLink: initiationResult.authorizationUrl,
+      reference,
+    }
   }
 
   // ── Quick link join — OTP flow ────────────────────────────────────────────
@@ -144,56 +405,27 @@ export class EscrowService {
     if (alreadyJoined) throw this.app.httpErrors.conflict('You have already joined this escrow')
 
     // Rate-limit: max 3 OTP requests per email+escrow per 5 minutes
-    const recentOtpCount = await withDbErrorHandler(
-      () =>
-        this.db.escrowJoinOtp.count({
-          where: {
-            escrowId: escrow.id,
-            email: input.email,
-            createdAt: { gte: new Date(Date.now() - 5 * 60 * 1000) },
-          },
-        }),
-      this.app,
-    )
-    if (recentOtpCount >= 3) {
+    const rateResults = await this.app.redis
+      .pipeline()
+      .incr(joinRateKey(escrow.id, input.email))
+      .expire(joinRateKey(escrow.id, input.email), JOIN_OTP_RATE_WINDOW_SEC)
+      .exec()
+    const requestCount = (rateResults?.[0]?.[1] as number) ?? 0
+    if (requestCount > 3) {
       throw this.app.httpErrors.tooManyRequests(
         'Too many OTP requests for this email. Please wait 5 minutes before trying again.',
       )
     }
 
-    await createJoinOtp(this.db, escrow.id, input.name, input.email)
-
-    const fundedStatuses = new Set<string>([
-      EscrowStatus.Funded,
-      EscrowStatus.Held,
-      EscrowStatus.AwaitingAction,
-      EscrowStatus.Released,
-    ])
-    const isFunded = fundedStatuses.has(escrow.status)
-    const creatorRole = escrow.participants[0]?.role as EscrowRole | undefined
-    const payeeCreated = creatorRole === EscrowRole.Payee
-
-    let fundingNotice: string
-    if (isFunded) {
-      fundingNotice = payeeCreated
-        ? 'Great news — this escrow is already funded! The money is locked in and waiting. Do your thing and get paid.'
-        : 'This escrow is fully funded and the money is locked in safely. Deliver the goods and get your release!'
-    } else if (payeeCreated) {
-      fundingNotice = `${input.name.split(' ')[0]}, you're the last piece of the puzzle! The payee has set everything up and is ready to go. Once you fund this escrow, the work kicks off and your money stays protected until you're satisfied.`
-    } else {
-      fundingNotice =
-        "Heads up — this escrow hasn't been funded yet. The payer still needs to deposit before things get moving. You'll be notified once the money is in."
-    }
+    await createJoinOtp(this.app.redis, escrow.id, input.name, input.email, escrow.title)
 
     return {
       message: 'OTP sent to your email. It expires in 10 minutes.',
       escrow: {
-        title: escrow.title,
-        amount: escrow.amount,
+        title:    escrow.title,
+        amount:   escrow.amount,
         currency: escrow.currency,
-        status: escrow.status,
-        isFunded,
-        fundingNotice,
+        status:   escrow.status,
       },
     }
   }
@@ -209,7 +441,7 @@ export class EscrowService {
     )
     if (!escrow) throw this.app.httpErrors.notFound('Escrow not found')
 
-    const otp = await verifyJoinOtp(this.db, escrow.id, input.email, input.otp)
+    const otp = await verifyJoinOtp(this.app.redis, escrow.id, input.email, input.otp)
     if (!otp) throw this.app.httpErrors.badRequest('Invalid or expired OTP')
 
     const existingRoles = escrow.participants.map((p) => p.role as EscrowRole)
@@ -228,15 +460,15 @@ export class EscrowService {
         this.db.$transaction(async (tx) => {
           const created = await tx.escrowParticipant.create({
             data: {
-              escrowId: escrow.id,
-              userId: null,
-              name: otp.name,
-              email: otp.email,
-              role: recipientRole,
+              escrowId:      escrow.id,
+              userId:        null,
+              name:          otp.name,
+              email:         otp.email,
+              role:          recipientRole,
               accountNumber: input.payeeAccount?.accountNumber,
-              bankCode: input.payeeAccount?.bankCode,
-              bankName: input.payeeAccount?.bankName,
-              accountName: input.payeeAccount?.accountName,
+              bankCode:      input.payeeAccount?.bankCode,
+              bankName:      input.payeeAccount?.bankName,
+              accountName:   input.payeeAccount?.accountName,
             },
           })
           await appendEscrowEvent(tx, escrow.id, 'ParticipantJoined', otp.email, {
@@ -247,15 +479,61 @@ export class EscrowService {
       this.app,
     )
 
+    // Payer joiner gets a fund token — they can fund without a Crove account
+    let fundToken: string | undefined
+    if (recipientRole === EscrowRole.Payer) {
+      fundToken = await this.issueActionToken(escrow.id, otp.email, EscrowRole.Payer, 'fund')
+    }
+
+    // Payee joiner: provision a Bachs Connect account so we can transfer on release
+    if (recipientRole === EscrowRole.Payee && input.payeeAccount) {
+      const bachsAccountId = await this.initPayeeBachsAccount(
+        otp.email,
+        otp.name,
+        input.payeeAccount,
+        escrow.currency,
+      )
+      if (bachsAccountId) {
+        await this.db.escrowParticipant.update({
+          where: { id: participant.id },
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          data: { bachsAccountId } as any,
+        })
+      }
+    }
+
+    // Build funding notice now that the participant is confirmed in the escrow
+    const fundedStatuses = new Set<string>([
+      EscrowStatus.Funded,
+      EscrowStatus.Held,
+      EscrowStatus.AwaitingAction,
+      EscrowStatus.Released,
+    ])
+    const isFunded = fundedStatuses.has(escrow.status)
+
+    let fundingNotice: string
+    if (recipientRole === EscrowRole.Payer) {
+      fundingNotice = isFunded
+        ? 'This escrow is already funded — the money is locked in and waiting.'
+        : 'You\'re in! Use your fund token to deposit the funds and activate this escrow.'
+    } else {
+      fundingNotice = isFunded
+        ? 'Great news — this escrow is already funded! The money is locked in and waiting. Do your thing and get paid.'
+        : "You're in! This escrow hasn't been funded yet. You'll be notified as soon as the payer deposits."
+    }
+
     return {
       participant,
       escrow: {
-        code: escrow.code,
-        title: escrow.title,
-        amount: escrow.amount,
+        code:     escrow.code,
+        title:    escrow.title,
+        amount:   escrow.amount,
         currency: escrow.currency,
-        status: escrow.status,
+        status:   escrow.status,
+        isFunded,
+        fundingNotice,
       },
+      ...(fundToken !== undefined ? { fundToken } : {}),
     }
   }
 
@@ -309,12 +587,10 @@ export class EscrowService {
     // Resolve payer email — authenticated users have it via the User relation;
     // quick-link participants carry it directly on the participant row.
     const payerParticipant = data.participants.find(
-      (p) =>
-        p.userId === actorId ||
-        (p.userId === null && !!actorEmail && p.email === actorEmail),
+      (p) => p.userId === actorId || (p.userId === null && !!actorEmail && p.email === actorEmail),
     )
     const payerEmail = payerParticipant?.user?.email ?? payerParticipant?.email
-    const payerName  = payerParticipant?.user?.name  ?? payerParticipant?.name  ?? undefined
+    const payerName = payerParticipant?.user?.name ?? payerParticipant?.name ?? undefined
     if (!payerEmail) {
       throw this.app.httpErrors.badRequest('Payer email could not be resolved')
     }
@@ -339,13 +615,13 @@ export class EscrowService {
     let initiationResult
     try {
       initiationResult = await provider.initiatePayment({
-        amount:       Math.round(escrow.amount * 100), // minor units (kobo / cents)
-        currency:     escrow.currency,
-        email:        payerEmail,
+        amount: Math.round(escrow.amount * 100), // minor units (kobo / cents)
+        currency: escrow.currency,
+        email: payerEmail,
         customerName: payerName,
         reference,
-        callbackUrl:  `${env.FRONTEND_URL}/e/${escrow.code}?payment=complete`,
-        metadata:     { escrowId, actorId, paymentId: payment.id },
+        callbackUrl: `${env.FRONTEND_URL}/e/${escrow.code}?payment=complete`,
+        metadata: { escrowId, actorId, paymentId: payment.id },
       })
     } catch (err) {
       await this.db.payment.update({
@@ -439,6 +715,22 @@ export class EscrowService {
 
     await eventDispatcher.dispatchMany(escrow.domainEvents)
     escrow.clearDomainEvents()
+
+    // Enqueue payout to the payee's Bachs Connect account
+    const payeeParticipant = data.participants.find((p) => p.role === EscrowRole.Payee)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const payeeBachsAccountId = (payeeParticipant as any)?.bachsAccountId as string | null | undefined
+    if (payeeBachsAccountId) {
+      const { payoutQueue } = getQueues()
+      const ref = `PAYOUT-${escrowId.slice(0, 8).toUpperCase()}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`
+      await payoutQueue?.add(
+        PAYOUT_JOBS.PROCESS_PAYOUT,
+        { escrowId, payeeAccountId: payeeBachsAccountId, amount: escrow.amount, currency: escrow.currency, reference: ref },
+        { jobId: `payout-${escrowId}` },
+      )
+    } else {
+      log.auth.warn({ escrowId }, 'payee has no Bachs account — payout skipped')
+    }
 
     return updated
   }
@@ -602,7 +894,7 @@ export class EscrowService {
     if (!data) throw this.app.httpErrors.notFound('Dispute not found')
 
     const dispute = EscrowDisputeEntity.from(data)
-    const escrow  = EscrowAggregate.from(data.escrow)
+    const escrow = EscrowAggregate.from(data.escrow)
 
     if (!escrow.isParticipant(resolvedById, resolvedByEmail)) {
       throw this.app.httpErrors.forbidden('You are not a participant in this escrow')
@@ -620,8 +912,7 @@ export class EscrowService {
       throw mapDomainError(err, this.app)
     }
 
-    const newEscrowStatus =
-      decision === 'release' ? EscrowStatus.Released : EscrowStatus.Refunded
+    const newEscrowStatus = decision === 'release' ? EscrowStatus.Released : EscrowStatus.Refunded
 
     try {
       escrow.assertCanTransitionTo(newEscrowStatus)
@@ -629,7 +920,7 @@ export class EscrowService {
       throw mapDomainError(err, this.app)
     }
 
-    return withDbErrorHandler(
+    const updatedEscrow = await withDbErrorHandler(
       () =>
         this.db.$transaction(async (tx) => {
           await tx.escrowDispute.update({
@@ -637,7 +928,7 @@ export class EscrowService {
             data: { status: 'Resolved', resolution, resolvedAt: new Date() },
           })
 
-          const updatedEscrow = await tx.escrow.update({
+          const result = await tx.escrow.update({
             where: { id: dispute.escrowId },
             data: {
               status: newEscrowStatus,
@@ -661,10 +952,29 @@ export class EscrowService {
                 : `Escrow ${escrow.code} refunded to payer via dispute resolution`,
           })
 
-          return updatedEscrow
+          return result
         }),
       this.app,
     )
+
+    if (decision === 'release') {
+      const payeeParticipant = data.escrow.participants.find((p) => p.role === EscrowRole.Payee)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const payeeBachsAccountId = (payeeParticipant as any)?.bachsAccountId as string | null | undefined
+      if (payeeBachsAccountId) {
+        const { payoutQueue } = getQueues()
+        const ref = `PAYOUT-${data.escrow.id.slice(0, 8).toUpperCase()}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`
+        await payoutQueue?.add(
+          PAYOUT_JOBS.PROCESS_PAYOUT,
+          { escrowId: data.escrow.id, payeeAccountId: payeeBachsAccountId, amount: escrow.amount, currency: escrow.currency, reference: ref },
+          { jobId: `payout-${data.escrow.id}` },
+        )
+      } else {
+        log.auth.warn({ escrowId: data.escrow.id }, 'payee has no Bachs account — payout skipped after dispute release')
+      }
+    }
+
+    return updatedEscrow
   }
 
   // ── Milestones ────────────────────────────────────────────────────────────
@@ -692,7 +1002,7 @@ export class EscrowService {
       throw this.app.httpErrors.notFound('Milestone not found')
     }
 
-    const escrow    = EscrowAggregate.from(escrowData)
+    const escrow = EscrowAggregate.from(escrowData)
     const milestone = MilestoneEntity.from(milestoneData)
 
     if (!escrow.isParticipant(actorId, actorEmail)) {
@@ -753,7 +1063,7 @@ export class EscrowService {
       throw this.app.httpErrors.notFound('Milestone not found')
     }
 
-    const escrow    = EscrowAggregate.from(escrowData)
+    const escrow = EscrowAggregate.from(escrowData)
     const milestone = MilestoneEntity.from(milestoneData)
 
     if (!escrow.isParticipant(actorId, actorEmail)) {
@@ -793,6 +1103,22 @@ export class EscrowService {
         escrowData.currency,
       ),
     )
+
+    // Enqueue partial payout for this milestone
+    const payeeParticipant = escrowData.participants.find((p) => p.role === EscrowRole.Payee)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const payeeBachsAccountId = (payeeParticipant as any)?.bachsAccountId as string | null | undefined
+    if (payeeBachsAccountId) {
+      const { payoutQueue } = getQueues()
+      const ref = `PAYOUT-MLT-${milestoneId.slice(0, 8).toUpperCase()}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`
+      await payoutQueue?.add(
+        PAYOUT_JOBS.PROCESS_PAYOUT,
+        { escrowId, payeeAccountId: payeeBachsAccountId, amount: Number(milestoneData.amount), currency: escrowData.currency, reference: ref, milestoneId },
+        { jobId: `payout-milestone-${milestoneId}` },
+      )
+    } else {
+      log.auth.warn({ escrowId, milestoneId }, 'payee has no Bachs account — milestone payout skipped')
+    }
 
     return approved
   }
@@ -876,8 +1202,7 @@ export class EscrowService {
     if (!escrow) throw this.app.httpErrors.notFound('Escrow not found')
 
     const isAuthorized =
-      escrow.creatorId === actorId ||
-      isParticipantMatch(escrow.participants, actorId, actorEmail)
+      escrow.creatorId === actorId || isParticipantMatch(escrow.participants, actorId, actorEmail)
 
     if (!isAuthorized) {
       throw this.app.httpErrors.forbidden('You are not a participant in this escrow')
@@ -915,8 +1240,7 @@ export class EscrowService {
     if (!data) throw this.app.httpErrors.notFound('Escrow not found')
 
     const isAuthorized =
-      data.creatorId === actorId ||
-      isParticipantMatch(data.participants, actorId, actorEmail)
+      data.creatorId === actorId || isParticipantMatch(data.participants, actorId, actorEmail)
 
     if (!isAuthorized) {
       throw this.app.httpErrors.forbidden('You are not a participant in this escrow')
@@ -926,6 +1250,54 @@ export class EscrowService {
   }
 
   // ── Internal ──────────────────────────────────────────────────────────────
+
+  private async initPayeeBachsAccount(
+    email: string,
+    name: string,
+    bankDetails: PayeeAccountInput,
+    currency: string,
+  ): Promise<string | null> {
+    if (env.ACTIVE_PAYMENT_PROVIDER !== 'bachs') return null
+    try {
+      const bachs = getBachsInstance()
+      const accountId = await bachs.createConnectAccount(email, name)
+      await bachs.setupPayeeAccount(accountId, {
+        balanceCurrencies: [currency],
+        payoutDestination: {
+          type: 'bank_account',
+          accountNumber: bankDetails.accountNumber,
+          accountName: bankDetails.accountName,
+          bankCode: bankDetails.bankCode,
+          currency,
+        },
+        persons: [{ name, email }],
+      })
+      return accountId
+    } catch (err) {
+      log.auth.error(
+        { err: (err as Error).message, email },
+        'Bachs Connect account creation failed — payee will need manual setup',
+      )
+      return null
+    }
+  }
+
+  private async issueActionToken(
+    escrowId: string,
+    email: string,
+    role: EscrowRole,
+    action: string,
+  ): Promise<string> {
+    const token = crypto.randomBytes(32).toString('hex') // 64-char hex
+
+    await this.app.redis.setex(
+      actionTokenKey(token),
+      ACTION_TOKEN_TTL_SEC,
+      JSON.stringify({ escrowId, email, role, action } satisfies StoredActionToken),
+    )
+
+    return token
+  }
 
   private async scheduleExpiryJob(escrowId: string, expiresAt: Date | null) {
     if (!expiresAt) return

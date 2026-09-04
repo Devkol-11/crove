@@ -20,9 +20,10 @@ const envSchema = z.object({
   GOOGLE_CLIENT_SECRET: z.string().optional(),
   BACHS_TEST_KEY: z.string().optional(),
   BACHS_LIVE_KEY: z.string().optional(),
-  // Per-endpoint signing secret from Bachs Developer Portal → Webhooks.
+  // Per-endpoint signing secrets from Bachs Developer Portal → Webhooks.
   // Separate from the API key — used to verify HMAC-SHA256 webhook signatures.
-  BACHS_WEBHOOK_SECRET: z.string().optional(),
+  BACHS_TEST_WH_SECRET: z.string().optional(),
+  BACHS_LIVE_WH_SECRET: z.string().optional(),
   ACTIVE_PAYMENT_PROVIDER: z.string(),
   PAYSTACK_SECRET_KEY: z.string().optional(),
   ACTIVE_EMAIL_PROVIDER: z.string(),
@@ -32,6 +33,23 @@ const envSchema = z.object({
   // Redirect OTP emails to this address in non-production environments
   DEV_OTP_EMAIL: z.string().email().optional(),
 }).superRefine((data, ctx) => {
+  if (data.ACTIVE_PAYMENT_PROVIDER === 'bachs') {
+    const isProduction = data.NODE_ENV === 'production'
+    if (isProduction && !data.BACHS_LIVE_WH_SECRET) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['BACHS_LIVE_WH_SECRET'],
+        message: 'BACHS_LIVE_WH_SECRET is required when ACTIVE_PAYMENT_PROVIDER=bachs in production',
+      })
+    }
+    if (!isProduction && !data.BACHS_TEST_WH_SECRET) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['BACHS_TEST_WH_SECRET'],
+        message: 'BACHS_TEST_WH_SECRET is required when ACTIVE_PAYMENT_PROVIDER=bachs in non-production',
+      })
+    }
+  }
   if (data.ACTIVE_EMAIL_PROVIDER === 'resend' && !data.RESEND_API_KEY) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,

@@ -100,18 +100,37 @@ export const createQuickEscrowSchema = z.object({
 
 export type CreateQuickEscrowInput = z.infer<typeof createQuickEscrowSchema>
 
+// ── Quick link creation — 2-step OTP flow ────────────────────────────────────
+
+// Step 1: submit escrow details → OTP sent to creator email
+// (reuses createQuickEscrowSchema body shape)
+
+// Step 2: confirm OTP → escrow created + fund token issued if creator is Payer
+export const confirmQuickEscrowSchema = z.object({
+  intentId: z.string().min(1, 'Intent ID is required'),
+  otp:      z.string().length(6, 'OTP must be 6 digits').trim(),
+})
+export type ConfirmQuickEscrowInput = z.infer<typeof confirmQuickEscrowSchema>
+
+// ── Quick link fund (no auth) ─────────────────────────────────────────────────
+
+export const fundWithTokenSchema = z.object({
+  fundToken: z.string().min(1, 'Fund token is required'),
+})
+export type FundWithTokenInput = z.infer<typeof fundWithTokenSchema>
+
 // ── Quick link recipient join — OTP flow ──────────────────────────────────────
 
 export const joinRequestSchema = z.object({
   name:  z.string().min(1, 'Your name is required'),
-  email: z.string().email('A valid email is required'),
+  email: z.string().email('A valid email is required').toLowerCase().trim(),
 })
 
 export type JoinRequestInput = z.infer<typeof joinRequestSchema>
 
 export const joinVerifySchema = z.object({
-  email:        z.string().email(),
-  otp:          z.string().length(6, 'OTP must be 6 digits'),
+  email:        z.string().email().toLowerCase().trim(),
+  otp:          z.string().length(6, 'OTP must be 6 digits').trim(),
   payeeAccount: payeeAccountSchema.optional(),
 })
 

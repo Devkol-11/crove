@@ -110,11 +110,11 @@ export function verifyBachsWebhook(
   }
 
   const normalizedEvent: WebhookVerificationResult['normalizedEvent'] =
-    payload.type === 'collection.succeeded'
-      ? 'payment.success'
-      : payload.type === 'collection.failed'
-        ? 'payment.failed'
-        : 'unknown'
+    payload.type === 'collection.succeeded'  ? 'payment.success'
+    : payload.type === 'collection.failed'   ? 'payment.failed'
+    : payload.type === 'transfer.created'    ? 'connect.transfer_created'
+    : payload.type === 'capability.updated'  ? 'connect.capability_updated'
+    : 'unknown'
 
   return {
     isValid:         true,

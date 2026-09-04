@@ -1,5 +1,5 @@
 import type { DomainEvent } from '../shared/base/DomainEvent'
-import { getQueues } from '../queues'
+import { getQueues } from '../pub_sub'
 import { log } from './logger'
 
 // Events routed to the escrow worker (timers, payouts, dispute flagging)

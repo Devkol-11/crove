@@ -3,6 +3,8 @@ import type { EscrowService } from './escrow.service'
 import {
   createEscrowSchema,
   createQuickEscrowSchema,
+  confirmQuickEscrowSchema,
+  fundWithTokenSchema,
   joinRequestSchema,
   joinVerifySchema,
   openDisputeSchema,
@@ -20,10 +22,16 @@ export function escrowHandlers(service: EscrowService) {
       return reply.send(await service.getPublicView(code))
     },
 
-    // POST /quick — create a quick link escrow, no account required
-    createQuick: async (request: FastifyRequest, reply: FastifyReply) => {
+    // POST /quick/initiate — step 1: send OTP to creator email
+    initiateQuick: async (request: FastifyRequest, reply: FastifyReply) => {
       const body = createQuickEscrowSchema.parse(request.body)
-      return reply.code(201).send(await service.createQuick(body))
+      return reply.send(await service.initiateQuick(body))
+    },
+
+    // POST /quick/confirm — step 2: verify OTP + create escrow (+ fundToken if creator is Payer)
+    confirmQuick: async (request: FastifyRequest, reply: FastifyReply) => {
+      const body = confirmQuickEscrowSchema.parse(request.body)
+      return reply.code(201).send(await service.confirmQuick(body))
     },
 
     // POST /:code/join — request OTP to join a quick link escrow
@@ -68,6 +76,13 @@ export function escrowHandlers(service: EscrowService) {
       return reply.send(
         await service.fundEscrow(id, request.authUser!.id, request.authUser!.email),
       )
+    },
+
+    // POST /:id/fund/quick — fund without a Crove account using a verified fund token
+    fundWithToken: async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = request.params as { id: string }
+      const { fundToken } = fundWithTokenSchema.parse(request.body)
+      return reply.send(await service.fundEscrowWithToken(id, fundToken))
     },
 
     // POST /:id/release

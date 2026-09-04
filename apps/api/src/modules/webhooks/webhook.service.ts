@@ -6,11 +6,36 @@ import {
   verifyBachsWebhook,
 } from '../../third_party/payment_providers/webhook-verification'
 import type { WebhookVerificationResult } from '../../third_party/payment_providers/types'
-import { getQueues } from '../../queues'
-import { PAYMENT_JOBS } from '../../queues/workers/payment.worker'
+import { getQueues } from '../../pub_sub'
+import { PAYMENT_JOBS } from '../../pub_sub/workers/payment.worker'
 import { log } from '../../lib/logger'
 
-const webhookLog = log.worker.payment
+const webhookLog = log.config
+
+type Headers = Record<string, string | string[] | undefined>
+
+// Identifies the payment provider from the inbound request headers.
+// Each provider stamps its own signature header — no body parsing needed.
+function detectProvider(headers: Headers): 'bachs' | 'paystack' | null {
+  if (headers['x-bachs-signature'])    return 'bachs'
+  if (headers['x-paystack-signature']) return 'paystack'
+  return null
+}
+
+// ── Dispatch table ────────────────────────────────────────────────────────────
+// Each entry is a function that verifies the payload and returns a normalised result.
+// Adding a new provider = adding one entry here + a verify function.
+
+type ProviderHandler = (
+  rawBody: Buffer,
+  headers: Headers,
+  service: WebhookService,
+) => Promise<{ received: true }>
+
+const PROVIDER_HANDLERS: Record<string, ProviderHandler> = {
+  bachs:    (body, headers, svc) => svc.handleBachsWebhook(body, headers),
+  paystack: (body, headers, svc) => svc.handlePaystackWebhook(body, headers),
+}
 
 export class WebhookService {
   constructor(
@@ -18,65 +43,118 @@ export class WebhookService {
     private readonly app: FastifyInstance,
   ) {}
 
-  async handlePaymentWebhook(
-    rawBody: Buffer,
-    headers: Record<string, string | string[] | undefined>,
-  ) {
-    const result = this.verifyForActiveProvider(rawBody, headers)
+  // ── Entry point ─────────────────────────────────────────────────────────────
 
-    if (!result.isValid) {
-      throw this.app.httpErrors.unauthorized('Invalid webhook signature')
+  async handlePaymentWebhook(rawBody: Buffer, headers: Headers): Promise<{ received: true }> {
+    const provider = detectProvider(headers)
+
+    if (!provider) {
+      webhookLog.warn('Webhook received with no recognisable provider signature header — rejected')
+      throw this.app.httpErrors.badRequest('Unrecognised webhook provider')
     }
 
-    // Only act on events we understand
+    const handler = PROVIDER_HANDLERS[provider]
+    return handler(rawBody, headers, this)
+  }
+
+  // ── Per-provider handlers ────────────────────────────────────────────────────
+
+  async handleBachsWebhook(rawBody: Buffer, headers: Headers): Promise<{ received: true }> {
+    const secret = env.NODE_ENV === 'production'
+      ? env.BACHS_LIVE_WH_SECRET
+      : env.BACHS_TEST_WH_SECRET
+
+    if (!secret) {
+      webhookLog.error('Bachs webhook secret is not configured — cannot verify signature')
+      throw this.app.httpErrors.internalServerError('Bachs webhook secret not configured')
+    }
+
+    const result = verifyBachsWebhook(rawBody, headers, secret)
+
+    if (!result.isValid) {
+      webhookLog.warn('Bachs webhook signature verification failed')
+      throw this.app.httpErrors.unauthorized('Invalid Bachs webhook signature')
+    }
+
+    return this.processVerifiedPayload(result, 'bachs')
+  }
+
+  async handlePaystackWebhook(rawBody: Buffer, headers: Headers): Promise<{ received: true }> {
+    const secret = env.PAYSTACK_SECRET_KEY
+
+    if (!secret) {
+      webhookLog.error('Paystack secret key is not configured — cannot verify signature')
+      throw this.app.httpErrors.internalServerError('Paystack secret key not configured')
+    }
+
+    const result = verifyPaystackWebhook(rawBody, headers, secret)
+
+    if (!result.isValid) {
+      webhookLog.warn('Paystack webhook signature verification failed')
+      throw this.app.httpErrors.unauthorized('Invalid Paystack webhook signature')
+    }
+
+    return this.processVerifiedPayload(result, 'paystack')
+  }
+
+  // ── Common post-verification logic ───────────────────────────────────────────
+  // Called after any provider handler confirms the signature is valid.
+
+  private async processVerifiedPayload(
+    result: WebhookVerificationResult,
+    provider: string,
+  ): Promise<{ received: true }> {
     if (result.normalizedEvent === 'unknown') {
-      webhookLog.info({ eventType: result.eventType }, 'webhook received — unrecognised event, acknowledged')
+      webhookLog.info(
+        { provider, eventType: result.eventType },
+        'webhook received — unrecognised event type, acknowledged',
+      )
       return { received: true }
     }
 
-    // Bachs recommends deduplicating on the event envelope `id` (evt_...).
-    // Paystack does not set eventId, so we fall back to our payment reference.
+    // Bachs deduplicates on the envelope `id` (evt_...).
+    // Paystack does not send an eventId, so we fall back to the payment reference.
     const dedupKey = result.eventId ?? result.reference
 
-    // Idempotency: check before inserting (fast path for duplicates)
+    // Fast-path duplicate check
     const existing = await this.db.inboundWebhook.findUnique({
       where: { reference: dedupKey },
     })
     if (existing) {
-      webhookLog.info({ dedupKey }, 'duplicate webhook — already processed')
+      webhookLog.info({ provider, dedupKey }, 'duplicate webhook — already processed, acknowledged')
       return { received: true }
     }
 
-    // Persist the raw webhook — unique constraint on reference handles any race condition
+    // Persist the raw webhook. Unique constraint on `reference` is the race-safe gate.
     try {
       await this.db.inboundWebhook.create({
         data: {
-          provider:   env.ACTIVE_PAYMENT_PROVIDER,
+          provider,
           eventType:  result.eventType,
           reference:  dedupKey,
           rawPayload: result.data as object,
         },
       })
     } catch (err: unknown) {
-      // P2002 = unique constraint — concurrent duplicate webhook, safe to ignore
       if ((err as { code?: string }).code === 'P2002') {
-        webhookLog.info({ dedupKey }, 'concurrent duplicate webhook — ignored')
+        // Concurrent duplicate — unique constraint caught the race
+        webhookLog.info({ provider, dedupKey }, 'concurrent duplicate webhook — ignored')
         return { received: true }
       }
       throw err
     }
 
-    // Enqueue the confirmation job — the worker does the actual escrow funding.
-    // Pass both reference (for payment lookup) and eventId (for InboundWebhook lookup).
+    // ── Dispatch to processing jobs ──────────────────────────────────────────
+
     if (result.normalizedEvent === 'payment.success') {
       const { paymentQueue } = getQueues()
       await paymentQueue?.add(
         PAYMENT_JOBS.CONFIRM_PAYMENT,
         { reference: result.reference, eventId: result.eventId },
-        { jobId: `confirm:${dedupKey}` },
+        { jobId: `confirm_${dedupKey.replace(/:/g, '_')}` },
       )
       webhookLog.info(
-        { reference: result.reference, eventId: result.eventId },
+        { provider, reference: result.reference, eventId: result.eventId },
         'payment.success webhook — confirm job enqueued',
       )
     }
@@ -91,29 +169,35 @@ export class WebhookService {
         data:  { processedAt: new Date() },
       })
       webhookLog.info(
-        { reference: result.reference, eventId: result.eventId },
+        { provider, reference: result.reference },
         'payment.failed webhook — payment marked Failed',
       )
     }
 
-    return { received: true }
-  }
-
-  private verifyForActiveProvider(
-    rawBody: Buffer,
-    headers: Record<string, string | string[] | undefined>,
-  ): WebhookVerificationResult {
-    switch (env.ACTIVE_PAYMENT_PROVIDER) {
-      case 'paystack':
-        return verifyPaystackWebhook(rawBody, headers, env.PAYSTACK_SECRET_KEY ?? '')
-      case 'bachs':
-        // BACHS_WEBHOOK_SECRET is the per-endpoint signing secret from the Bachs
-        // Developer Portal — it is NOT the API key (BACHS_TEST_KEY / BACHS_LIVE_KEY).
-        return verifyBachsWebhook(rawBody, headers, env.BACHS_WEBHOOK_SECRET ?? '')
-      default:
-        throw this.app.httpErrors.internalServerError(
-          `No webhook verifier registered for provider: ${env.ACTIVE_PAYMENT_PROVIDER}`,
-        )
+    if (result.normalizedEvent === 'connect.transfer_created') {
+      // A transfer from the platform to a Connect account was created.
+      // The payment reference on these events is the payout reference we set when calling createTransfer.
+      webhookLog.info(
+        { provider, reference: result.reference, eventId: result.eventId },
+        'connect.transfer_created webhook — payout acknowledged',
+      )
+      await this.db.inboundWebhook.updateMany({
+        where: { reference: dedupKey },
+        data:  { processedAt: new Date() },
+      })
     }
+
+    if (result.normalizedEvent === 'connect.capability_updated') {
+      webhookLog.info(
+        { provider, eventId: result.eventId },
+        'connect.capability_updated webhook — acknowledged (no action)',
+      )
+      await this.db.inboundWebhook.updateMany({
+        where: { reference: dedupKey },
+        data:  { processedAt: new Date() },
+      })
+    }
+
+    return { received: true }
   }
 }

@@ -15,11 +15,25 @@ export default async function escrowRoutes(app: FastifyInstance) {
     h.getPublicView,
   )
 
-  // Create a quick link escrow without an account
+  // Step 1: submit escrow details → OTP sent to creator email for verification
   app.post(
-    '/quick',
+    '/quick/initiate',
     { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } },
-    h.createQuick,
+    h.initiateQuick,
+  )
+
+  // Step 2: verify creator OTP → escrow created + fundToken issued if creator is Payer
+  app.post(
+    '/quick/confirm',
+    { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } },
+    h.confirmQuick,
+  )
+
+  // Fund a quick-link escrow using a verified fund token (no Crove account required)
+  app.post(
+    '/:id/fund/quick',
+    { config: { rateLimit: { max: 5, timeWindow: '1 minute' } } },
+    h.fundWithToken,
   )
 
   // Request OTP to join a quick link escrow as the missing participant

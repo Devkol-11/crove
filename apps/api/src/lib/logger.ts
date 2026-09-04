@@ -26,6 +26,8 @@ export const logger = pino({
 
 export const log = {
   config: logger.child({ module: 'config' }),
+  server: logger.child({ module: 'server' }),
+  redis:  logger.child({ module: 'redis' }),
   db:     logger.child({ module: 'db' }),
   events: logger.child({ module: 'events' }),
   auth:   logger.child({ module: 'auth' }),
@@ -34,5 +36,6 @@ export const log = {
     escrow:        logger.child({ module: 'worker:escrow' }),
     auth:          logger.child({ module: 'worker:auth' }),
     payment:       logger.child({ module: 'worker:payment' }),
+    payout:        logger.child({ module: 'worker:payout' }),
   },
 }

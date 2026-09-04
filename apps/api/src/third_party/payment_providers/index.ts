@@ -4,12 +4,10 @@ import { Paystack } from './paystack'
 import type { PaymentProvider } from './types'
 
 export type { PaymentProvider }
-export type {
-  InitiatePaymentParams,
-  PaymentInitiationResult,
-  VerifyPaymentResult,
-} from './types'
+export type { InitiatePaymentParams, PaymentInitiationResult, VerifyPaymentResult } from './types'
 export { PaymentError } from './payment.error'
+export { Bachs } from './bachs'
+export type { BachsPlatformBalance, BachsCreateTransferOpts } from './bachs'
 
 const SUPPORTED = new Set(['paystack', 'bachs'])
 
@@ -30,8 +28,7 @@ export function getActivePaymentProvider(): PaymentProvider {
       return new Paystack(env.PAYSTACK_SECRET_KEY)
     }
     case 'bachs': {
-      const key =
-        env.NODE_ENV === 'production' ? env.BACHS_LIVE_KEY : env.BACHS_TEST_KEY
+      const key = env.NODE_ENV === 'production' ? env.BACHS_LIVE_KEY : env.BACHS_TEST_KEY
       if (!key) {
         throw new Error(
           'BACHS_TEST_KEY or BACHS_LIVE_KEY is required when ACTIVE_PAYMENT_PROVIDER=bachs',
@@ -42,4 +39,10 @@ export function getActivePaymentProvider(): PaymentProvider {
     default:
       throw new Error(`Unsupported payment provider: "${active}"`)
   }
+}
+
+export function getBachsInstance(): Bachs {
+  const key = env.NODE_ENV === 'production' ? env.BACHS_LIVE_KEY : env.BACHS_TEST_KEY
+  if (!key) throw new Error('Bachs API key is not configured')
+  return new Bachs(key)
 }

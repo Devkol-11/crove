@@ -189,7 +189,6 @@ model Escrow {
   events        EscrowEvent[]
   disputes      EscrowDispute[]
   ledgerEntries LedgerEntry[]
-  joinOtps      EscrowJoinOtp[]
   payments      Payment[]
 
   createdAt  DateTime  @default(now())
@@ -211,10 +210,11 @@ model EscrowParticipant {
   role     EscrowRole
 
   // Payee payout account — required before an escrow can be funded
-  accountNumber String?  // 10-digit NUBAN
-  bankCode      String?  // e.g. "058" for GTBank — used by payment provider for payouts
-  bankName      String?  // e.g. "Guaranty Trust Bank" — for display
-  accountName   String?  // Verified name on the account
+  accountNumber  String?  // 10-digit NUBAN
+  bankCode       String?  // e.g. "058" for GTBank — used by payment provider for payouts
+  bankName       String?  // e.g. "Guaranty Trust Bank" — for display
+  accountName    String?  // Verified name on the account
+  bachsAccountId String?  // Bachs Connect account ID (acct_xxx) — set when Payee joins
 
   joinedAt DateTime @default(now())
 
@@ -286,21 +286,6 @@ model EscrowDispute {
   updatedAt  DateTime      @updatedAt
 
   @@map("disputes")
-}
-
-// One-time codes sent to quick-link recipients to verify their identity before joining.
-model EscrowJoinOtp {
-  id        String    @id @default(cuid())
-  escrowId  String
-  escrow    Escrow    @relation(fields: [escrowId], references: [id], onDelete: Cascade)
-  email     String
-  name      String
-  code      String    // 6-digit numeric OTP
-  expiresAt DateTime
-  usedAt    DateTime?
-  createdAt DateTime  @default(now())
-
-  @@map("escrow_join_otps")
 }
 
 // Every money movement in the application is recorded here — append-only.
