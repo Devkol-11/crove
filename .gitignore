@@ -18,9 +18,15 @@ logs/
 .DS_Store
 Thumbs.db
 
-# IDE
-.vscode/
+# IDE — commit shared settings, ignore personal files
+.vscode/*.code-workspace
 .idea/
+
+# Playwright artifacts
+test-results/
+playwright-report/
+apps/web/.next/
+apps/web/tsconfig.tsbuildinfo
 
 # Docker volumes
 postgres_data/

@@ -1,0 +1,34 @@
+{
+  // ── Playwright VS Code Extension ────────────────────────────────────────────
+  // Points the extension to our monorepo e2e package.
+  // The Testing panel will discover all *.spec.ts files under apps/e2e/tests/.
+  "playwright.configFile": "apps/e2e/playwright.config.ts",
+  "playwright.reuseBrowser": false,
+  "playwright.showTrace": "never",
+
+  // ── TypeScript ───────────────────────────────────────────────────────────────
+  "typescript.tsdk": "node_modules/typescript/lib",
+  "typescript.enablePromptUseWorkspaceTsdk": true,
+
+  // ── Editor ──────────────────────────────────────────────────────────────────
+  "editor.formatOnSave": true,
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  "editor.codeActionsOnSave": {
+    "source.fixAll.eslint": "explicit"
+  },
+
+  // ── Files ────────────────────────────────────────────────────────────────────
+  "files.exclude": {
+    "**/node_modules": true,
+    "**/.next": true,
+    "**/dist": true,
+    "**/playwright-report": true,
+    "**/test-results": true
+  },
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/.next": true,
+    "**/dist": true,
+    "**/pnpm-lock.yaml": true
+  }
+}

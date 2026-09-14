@@ -1,0 +1,29 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Playwright: API tests",
+      "type": "playwright",
+      "request": "launch",
+      "configFile": "${workspaceFolder}/apps/e2e/playwright.config.ts",
+      "testProjects": ["api"]
+    },
+    {
+      "name": "Playwright: E2E (chromium)",
+      "type": "playwright",
+      "request": "launch",
+      "configFile": "${workspaceFolder}/apps/e2e/playwright.config.ts",
+      "testProjects": ["chromium"]
+    },
+    {
+      "name": "Debug: API server",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "api", "dev"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "skipFiles": ["<node_internals>/**"]
+    }
+  ]
+}
