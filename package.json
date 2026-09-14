@@ -10,7 +10,10 @@
     "db:migrate": "pnpm --filter api db:migrate",
     "db:studio": "pnpm --filter api db:studio",
     "docker:up": "docker compose up -d",
-    "docker:down": "docker compose down"
+    "docker:down": "docker compose down",
+    "test:e2e": "pnpm --filter e2e test",
+    "test:api": "pnpm --filter e2e test:api",
+    "playwright:install": "pnpm --filter e2e exec playwright install --with-deps chromium"
   },
   "devDependencies": {
     "prettier": "^3.3.0",
