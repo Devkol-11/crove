@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { m, useReducedMotion } from "motion/react";
-import { ArrowRight, Zap, Layers, ShieldCheck, Banknote, Check, Lock } from "lucide-react";
+import { ArrowRight, Zap, Layers, ShieldCheck, Banknote } from "lucide-react";
 
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 
@@ -20,13 +20,6 @@ const GATED_TYPES = [
     tagline: "Pay as each phase completes.",
     description:
       "Break any project into milestones and release funds as each phase is delivered and approved — not all at once, not upfront.",
-    goodFor: "Software builds, design sprints, consulting, content production.",
-    features: [
-      "Split project into named phases",
-      "Release funds per milestone",
-      "Built-in approval workflow",
-      "Dispute protection at each stage",
-    ],
   },
   {
     Icon: ShieldCheck,
@@ -34,13 +27,6 @@ const GATED_TYPES = [
     tagline: "Funds release only when the condition is met.",
     description:
       "Define the exact trigger condition before anyone moves money. Both sides agree upfront — the escrow enforces it automatically.",
-    goodFor: "Performance contracts, SLA-backed services, outcome-based deals.",
-    features: [
-      "Define custom release conditions",
-      "Both parties agree upfront",
-      "Automatic condition verification",
-      "Dispute resolution built in",
-    ],
   },
   {
     Icon: Banknote,
@@ -48,13 +34,6 @@ const GATED_TYPES = [
     tagline: "Reserve funds to hold a deal in place.",
     description:
       "Lock a deposit while the rest of the deal is arranged. The seller knows the buyer is serious — the buyer knows their money is safe.",
-    goodFor: "Property, large equipment, event bookings, high-value sales.",
-    features: [
-      "Lock partial deposit instantly",
-      "Rest of deal arranged separately",
-      "Refundable on mutual agreement",
-      "Proves buyer commitment to seller",
-    ],
   },
 ];
 
@@ -120,12 +99,12 @@ export default function EscrowLink() {
           </div>
         </m.div>
 
-        {/* Quick Link — the hero card */}
+        {/* Quick Link — hero card */}
         <m.div
           className="rounded-2xl p-8 sm:p-10 mb-5 relative overflow-hidden"
           style={{
             background:
-              "radial-gradient(ellipse at 15% 0%, rgba(255,200,37,0.18) 0%, transparent 55%), var(--color-bg)",
+              "radial-gradient(ellipse at 15% 0%, rgba(74,222,128,0.07) 0%, transparent 55%), var(--color-bg)",
             border: "1px solid var(--color-accent-border)",
           }}
           initial={{ opacity: 0, y: 24 }}
@@ -137,7 +116,7 @@ export default function EscrowLink() {
               ? {}
               : {
                   y: -6,
-                  boxShadow: "0 24px 72px rgba(201, 162, 75, 0.18)",
+                  boxShadow: "0 24px 72px rgba(74,222,128,0.1)",
                 }
           }
         >
@@ -148,10 +127,10 @@ export default function EscrowLink() {
                 className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0"
                 style={{
                   backgroundColor: "var(--color-accent)",
-                  boxShadow: "0 8px 24px rgba(255,200,37,0.3)",
+                  boxShadow: "0 8px 24px rgba(74,222,128,0.22)",
                 }}
               >
-                <Zap size={17} style={{ color: "#0b0d10" }} strokeWidth={2.5} />
+                <Zap size={17} style={{ color: "#060e08" }} strokeWidth={2.5} />
               </div>
               <div>
                 <h3
@@ -231,7 +210,9 @@ export default function EscrowLink() {
                       border: "1px solid var(--color-accent-border)",
                     }}
                   >
-                    <Check size={10} style={{ color: "var(--color-accent)" }} strokeWidth={3} />
+                    <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+                      <path d="M2 5L4 7L8 3" stroke="var(--color-accent)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
                   </span>
                   <span
                     style={{
@@ -255,7 +236,7 @@ export default function EscrowLink() {
             <Link
               href="/sign-up"
               className="inline-flex items-center gap-2 rounded-full font-semibold text-sm px-7 py-3.5 transition-all hover:brightness-110"
-              style={{ backgroundColor: "var(--color-accent)", color: "#0b0d10" }}
+              style={{ backgroundColor: "var(--color-accent)", color: "#060e08" }}
             >
               Create a quick escrow
               <ArrowRight size={14} aria-hidden="true" />
@@ -265,114 +246,93 @@ export default function EscrowLink() {
 
         {/* Gated type cards */}
         <m.div
-          className="grid grid-cols-1 sm:grid-cols-3 gap-5"
+          className="grid grid-cols-1 sm:grid-cols-3 gap-4"
           initial="hidden"
           whileInView="visible"
           viewport={{ once: true, margin: "-60px" }}
           variants={{
             hidden: {},
             visible: {
-              transition: { staggerChildren: 0.13, delayChildren: 0.05 },
+              transition: { staggerChildren: 0.1, delayChildren: 0.05 },
             },
           }}
         >
-          {GATED_TYPES.map(({ Icon, name, tagline, description, goodFor, features }, idx) => (
+          {GATED_TYPES.map(({ Icon, name, tagline, description }) => (
             <m.div
               key={name}
-              className="rounded-2xl flex flex-col relative overflow-hidden"
+              className="rounded-2xl flex flex-col"
               style={{
-                background:
-                  "radial-gradient(ellipse at 110% -10%, rgba(255,200,37,0.09) 0%, transparent 52%), var(--color-bg)",
+                background: "var(--color-bg)",
                 border: "1px solid var(--color-surface-line)",
-                padding: "28px",
+                padding: "24px",
               }}
               variants={{
-                hidden: { opacity: 0, y: 24 },
-                visible: {
-                  opacity: 1,
-                  y: 0,
-                  transition: { duration: 0.55, ease: EASE },
-                },
+                hidden: { opacity: 0, y: 20 },
+                visible: { opacity: 1, y: 0, transition: { duration: 0.5, ease: EASE } },
               }}
               whileHover={
                 reduced
                   ? {}
-                  : {
-                      y: -9,
-                      borderColor: "var(--color-accent-border)",
-                      boxShadow:
-                        "0 28px 80px rgba(0,0,0,0.32), 0 0 0 1px rgba(255,200,37,0.2), 0 0 56px rgba(255,200,37,0.07)",
-                    }
+                  : { y: -3, borderColor: "var(--color-accent-border)" }
               }
-              transition={{ duration: 0.3, ease: EASE }}
+              transition={{ duration: 0.22, ease: EASE }}
             >
-              {/* Header */}
-              <div className="flex items-start justify-between mb-6">
-                <m.div
-                  className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0"
+              {/* Header: icon + name + account badge */}
+              <div className="flex items-start justify-between gap-3 mb-5">
+                <div className="flex items-start gap-3">
+                  <div
+                    className="w-7 h-7 rounded-md flex items-center justify-center shrink-0 mt-0.5"
+                    style={{
+                      backgroundColor: "var(--color-accent-soft)",
+                      border: "1px solid var(--color-accent-border)",
+                    }}
+                  >
+                    <Icon size={13} style={{ color: "var(--color-accent)" }} strokeWidth={1.8} />
+                  </div>
+                  <div>
+                    <h3
+                      className="font-semibold"
+                      style={{
+                        fontFamily: "var(--font-heading)",
+                        fontSize: "0.9375rem",
+                        letterSpacing: "-0.01em",
+                        color: "var(--color-text)",
+                      }}
+                    >
+                      {name}
+                    </h3>
+                    <p
+                      style={{
+                        fontFamily: "var(--font-body)",
+                        fontSize: "0.75rem",
+                        color: "var(--color-text-muted)",
+                        marginTop: "2px",
+                      }}
+                    >
+                      {tagline}
+                    </p>
+                  </div>
+                </div>
+                <span
+                  className="shrink-0 text-[10px] font-medium px-2 py-0.5 rounded-full border"
                   style={{
-                    backgroundColor: "var(--color-accent-soft)",
-                    border: "1px solid var(--color-accent-border)",
-                  }}
-                  whileHover={reduced ? {} : { scale: 1.1, rotate: -6 }}
-                  transition={{ duration: 0.2, ease: EASE }}
-                >
-                  <Icon size={17} style={{ color: "var(--color-accent)" }} strokeWidth={1.8} />
-                </m.div>
-
-                <m.span
-                  className="inline-flex items-center gap-1.5 text-xs font-medium rounded-full"
-                  style={{
-                    padding: "4px 10px",
-                    backgroundColor: "rgba(255,200,37,0.08)",
-                    border: "1px solid rgba(255,200,37,0.22)",
                     color: "var(--color-text-muted)",
+                    borderColor: "var(--color-surface-line)",
                     fontFamily: "var(--font-body)",
-                  }}
-                  animate={{ opacity: [0.6, 1, 0.6] }}
-                  transition={{
-                    duration: 2.8,
-                    repeat: Infinity,
-                    ease: "easeInOut",
-                    delay: idx * 0.95,
+                    opacity: 0.75,
+                    whiteSpace: "nowrap",
                   }}
                 >
-                  <Lock size={9} strokeWidth={2.5} style={{ color: "var(--color-accent)", opacity: 0.75 }} />
-                  Requires account
-                </m.span>
+                  Account required
+                </span>
               </div>
-
-              {/* Name + tagline */}
-              <h3
-                className="font-bold mb-1"
-                style={{
-                  fontFamily: "var(--font-heading)",
-                  fontSize: "1.15rem",
-                  lineHeight: 1.25,
-                  letterSpacing: "-0.015em",
-                  color: "var(--color-text)",
-                }}
-              >
-                {name}
-              </h3>
-              <p
-                className="font-medium mb-4"
-                style={{
-                  fontFamily: "var(--font-body)",
-                  fontSize: "0.8rem",
-                  color: "var(--color-accent)",
-                  letterSpacing: "0.01em",
-                }}
-              >
-                {tagline}
-              </p>
 
               {/* Description */}
               <p
-                className="mb-5 flex-1"
+                className="flex-1 mb-6"
                 style={{
                   fontFamily: "var(--font-body)",
-                  fontSize: "0.9rem",
+                  fontSize: "0.875rem",
                   lineHeight: 1.72,
                   color: "var(--color-text-muted)",
                 }}
@@ -380,99 +340,20 @@ export default function EscrowLink() {
                 {description}
               </p>
 
-              {/* Feature bullets — stagger in from left */}
-              <ul className="flex flex-col gap-2.5 mb-5">
-                {features.map((f, i) => (
-                  <m.li
-                    key={f}
-                    className="flex items-center gap-2.5"
-                    initial={{ opacity: 0, x: -10 }}
-                    whileInView={{ opacity: 1, x: 0 }}
-                    viewport={{ once: true }}
-                    transition={{ delay: 0.1 + i * 0.07, duration: 0.38, ease: EASE }}
-                  >
-                    <span
-                      className="w-4 h-4 rounded-full flex items-center justify-center shrink-0"
-                      style={{
-                        backgroundColor: "var(--color-accent-soft)",
-                        border: "1px solid var(--color-accent-border)",
-                      }}
-                    >
-                      <Check size={8} style={{ color: "var(--color-accent)" }} strokeWidth={3.5} />
-                    </span>
-                    <span
-                      style={{
-                        fontFamily: "var(--font-body)",
-                        fontSize: "0.825rem",
-                        color: "var(--color-text-muted)",
-                      }}
-                    >
-                      {f}
-                    </span>
-                  </m.li>
-                ))}
-              </ul>
-
-              {/* Good for */}
-              <div
-                className="mb-5 rounded-lg px-3.5 py-2.5"
-                style={{
-                  backgroundColor: "rgba(255,200,37,0.05)",
-                  border: "1px solid rgba(255,200,37,0.12)",
-                }}
-              >
-                <p
-                  className="font-semibold uppercase tracking-widest mb-1"
-                  style={{ fontSize: "0.64rem", color: "var(--color-accent)", opacity: 0.8 }}
-                >
-                  Good for
-                </p>
-                <p
-                  style={{
-                    fontFamily: "var(--font-body)",
-                    fontSize: "0.775rem",
-                    lineHeight: 1.6,
-                    color: "var(--color-text-muted)",
-                  }}
-                >
-                  {goodFor}
-                </p>
-              </div>
-
-              {/* CTA — prominent accent button */}
-              <m.div
-                className="mt-auto"
-                whileHover={reduced ? {} : { scale: 1.025 }}
-                whileTap={reduced ? {} : { scale: 0.975 }}
-                transition={{ duration: 0.15 }}
-              >
+              {/* CTA */}
+              <div style={{ borderTop: "1px solid var(--color-surface-line)", paddingTop: "16px" }}>
                 <Link
                   href="/sign-up"
-                  className="flex items-center justify-center gap-2 rounded-xl text-sm font-semibold w-full"
+                  className="inline-flex items-center gap-1.5 text-xs font-medium transition-opacity hover:opacity-70"
                   style={{
-                    padding: "12px 20px",
-                    backgroundColor: "var(--color-accent-soft)",
-                    border: "1px solid var(--color-accent-border)",
                     color: "var(--color-accent)",
                     fontFamily: "var(--font-body)",
-                    transition: "background-color 200ms, box-shadow 200ms",
-                  }}
-                  onMouseEnter={(e) => {
-                    (e.currentTarget as HTMLElement).style.backgroundColor =
-                      "rgba(255,200,37,0.22)";
-                    (e.currentTarget as HTMLElement).style.boxShadow =
-                      "0 0 20px rgba(255,200,37,0.18)";
-                  }}
-                  onMouseLeave={(e) => {
-                    (e.currentTarget as HTMLElement).style.backgroundColor =
-                      "var(--color-accent-soft)";
-                    (e.currentTarget as HTMLElement).style.boxShadow = "none";
                   }}
                 >
-                  Sign up to access
-                  <ArrowRight size={13} aria-hidden="true" />
+                  Get started
+                  <ArrowRight size={11} aria-hidden="true" />
                 </Link>
-              </m.div>
+              </div>
             </m.div>
           ))}
         </m.div>

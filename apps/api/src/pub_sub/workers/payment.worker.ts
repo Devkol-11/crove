@@ -22,6 +22,8 @@ interface ConfirmPaymentPayload {
   reference: string
   /** Provider event ID (Bachs: evt_...) — used to look up the InboundWebhook record */
   eventId?: string
+  /** Bachs charge ID (ch_xxx) from collection.succeeded — stored for later refund creation */
+  chargeId?: string
 }
 
 // Thrown inside the DB transaction when the escrow is no longer in a fundable state
@@ -44,7 +46,7 @@ export function startPaymentWorker(redis: Redis) {
         return
       }
 
-      const { reference, eventId } = job.data
+      const { reference, eventId, chargeId } = job.data
 
       const payment = await db.payment.findUnique({ where: { reference } })
       if (!payment) {
@@ -214,6 +216,7 @@ export function startPaymentWorker(redis: Redis) {
             data: {
               status:      'Completed',
               providerRef: verification.providerRef,
+              ...(chargeId ? { chargeId } : {}),
             },
           })
 
@@ -266,16 +269,19 @@ export function startPaymentWorker(redis: Redis) {
         where: { escrowId: payment.escrowId, role: 'Payer' },
       })
 
-      if (!payerParticipant?.userId) {
+      if (!payerParticipant) {
         workerLog.warn(
           { escrowId: payment.escrowId },
-          'no payer participant with userId found — EscrowFundedEvent not dispatched',
+          'no payer participant found — EscrowFundedEvent not dispatched',
         )
       } else {
+        // Quick-link payers have userId = null; fall back to email so the event
+        // is always dispatched and notifications reach both parties.
+        const payerIdentifier = payerParticipant.userId ?? payerParticipant.email ?? 'unknown'
         await eventDispatcher.dispatch(
           new EscrowFundedEvent(
             payment.escrowId,
-            payerParticipant.userId,
+            payerIdentifier,
             Number(payment.amount),
             payment.currency,
           ),

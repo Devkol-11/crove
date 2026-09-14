@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "shadcn-ui": {
+      "command": "npx",
+      "args": ["-y", "shadcn@canary", "mcp"]
+    }
+  }
+}

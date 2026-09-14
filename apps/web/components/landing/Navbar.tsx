@@ -13,11 +13,12 @@ const NAV_LINKS = [
   { href: "#pricing", label: "Pricing" },
 ];
 
-function CroveMark() {
+/* Original SVG mark — exported as CroveLogo for auth layout compatibility */
+export function CroveLogo({ size = 28 }: { size?: number }) {
   return (
     <svg
-      width="28"
-      height="28"
+      width={size}
+      height={size}
       viewBox="0 0 28 28"
       fill="none"
       aria-hidden="true"
@@ -28,7 +29,15 @@ function CroveMark() {
         fill="var(--color-accent)"
         opacity="0.55"
       />
-      <rect x="9" y="12" width="10" height="4" rx="0.5" fill="var(--color-accent)" opacity="0.9" />
+      <rect
+        x="9"
+        y="12"
+        width="10"
+        height="4"
+        rx="0.5"
+        fill="var(--color-accent)"
+        opacity="0.9"
+      />
     </svg>
   );
 }
@@ -39,18 +48,28 @@ export default function Navbar() {
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 48);
-    onScroll(); // initialise on mount
+    onScroll();
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
+  /*
+   * When NOT scrolled the header is transparent and sits directly on top of the
+   * hero's hardcoded dark background (#060e08). In light mode var(--color-text)
+   * becomes dark green — invisible on dark. Use hardcoded light values when
+   * unscrolled so text is always readable regardless of theme.
+   * When scrolled the glass background adapts to the theme, so use theme vars.
+   */
+  const linkColor = scrolled
+    ? "var(--color-text-muted)"
+    : "rgba(232, 245, 236, 0.7)";
+  const logoTextColor = scrolled ? "var(--color-text)" : "#e8f5ec";
+  const iconColor = scrolled
+    ? "var(--color-text-muted)"
+    : "rgba(232, 245, 236, 0.7)";
+
   return (
     <>
-      {/*
-       * backdrop-filter is always on; keeping it at blur(12px) regardless
-       * of scrolled state avoids the "none → blur" transition issue across
-       * browsers. The blur only becomes visible once the background gains opacity.
-       */}
       <header
         className="fixed top-0 left-0 right-0 z-50"
         style={{
@@ -67,57 +86,62 @@ export default function Navbar() {
             "background-color 350ms ease, border-color 350ms ease, box-shadow 350ms ease",
         }}
       >
-        <div className="max-w-7xl mx-auto px-6 sm:px-8 flex items-center justify-between py-4 sm:py-5">
+        <div className="w-full px-10 sm:px-16 flex items-center justify-between py-5 sm:py-7">
           {/* Logo */}
-          <Link href="/" className="flex items-center gap-2.5 shrink-0">
-            <CroveMark />
+          <Link href="/" className="flex items-center gap-3 shrink-0">
+            <CroveLogo size={34} />
             <span
-              className="text-base font-semibold tracking-tight"
+              className="text-xl font-bold tracking-tight"
               style={{
                 fontFamily: "var(--font-heading)",
-                color: "var(--color-text)",
+                color: logoTextColor,
+                letterSpacing: "-0.02em",
+                transition: "color 350ms ease",
               }}
             >
               Crove
             </span>
           </Link>
 
-          {/* Desktop nav — wider gap so links breathe */}
+          {/* Desktop nav */}
           <nav
-            className="hidden md:flex items-center gap-9"
+            className="hidden md:flex items-center gap-10"
             aria-label="Main navigation"
           >
             {NAV_LINKS.map((link) => (
               <Link
                 key={link.href}
                 href={link.href}
-                className="text-sm transition-colors hover:text-text"
-                style={{ color: "var(--color-text-muted)" }}
+                className="text-sm transition-colors hover:opacity-100"
+                style={{ color: linkColor, transition: "color 350ms ease" }}
               >
                 {link.label}
               </Link>
             ))}
           </nav>
 
-          {/* Desktop CTAs — all items share the same vertical center via items-center */}
+          {/* Desktop CTAs */}
           <div className="hidden md:flex items-center gap-3">
             <ThemeToggle />
             <Link
               href="/sign-in"
               className="text-sm px-4 py-2 rounded-full border transition-colors hover:border-accent-deep"
               style={{
-                color: "var(--color-text-muted)",
-                borderColor: "var(--color-surface-line)",
+                color: linkColor,
+                borderColor: scrolled
+                  ? "var(--color-surface-line)"
+                  : "rgba(74, 222, 128, 0.25)",
+                transition: "color 350ms ease, border-color 350ms ease",
               }}
             >
               Sign in
             </Link>
             <Link
               href="/sign-up"
-              className="text-sm px-5 py-2 rounded-full font-semibold transition-all hover:brightness-110"
+              className="text-sm px-5 py-2 rounded-full font-semibold transition-all hover:brightness-110 active:scale-95"
               style={{
                 backgroundColor: "var(--color-accent)",
-                color: "#0b0d10",
+                color: "#060e08",
               }}
             >
               Create escrow
@@ -133,7 +157,7 @@ export default function Navbar() {
           >
             <Menu
               size={22}
-              style={{ color: "var(--color-text-muted)" }}
+              style={{ color: iconColor, transition: "color 350ms ease" }}
             />
           </button>
         </div>
@@ -145,7 +169,10 @@ export default function Navbar() {
           <>
             <m.div
               className="fixed inset-0 z-50"
-              style={{ backgroundColor: "var(--color-overlay)", backdropFilter: "blur(4px)" }}
+              style={{
+                backgroundColor: "var(--color-overlay)",
+                backdropFilter: "blur(4px)",
+              }}
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
@@ -165,7 +192,7 @@ export default function Navbar() {
             >
               <div className="flex items-center justify-between mb-10">
                 <div className="flex items-center gap-2.5">
-                  <CroveMark />
+                  <CroveLogo size={22} />
                   <span
                     className="text-base font-semibold"
                     style={{
@@ -232,7 +259,7 @@ export default function Navbar() {
                   className="text-center py-3 rounded-full text-sm font-semibold"
                   style={{
                     backgroundColor: "var(--color-accent)",
-                    color: "#0b0d10",
+                    color: "#060e08",
                   }}
                   onClick={() => setMobileOpen(false)}
                 >

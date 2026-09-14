@@ -11,6 +11,8 @@ export interface InitiatePaymentParams {
   /** URL the user is redirected to after completing payment on the provider's page */
   callbackUrl: string
   metadata?: Record<string, unknown>
+  /** Restrict which Bachs payment corridors appear on the checkout page (ignored by other providers) */
+  paymentMethodTypes?: string[]
 }
 
 export interface PaymentInitiationResult {
@@ -41,7 +43,7 @@ export interface WebhookVerificationResult {
   /** Raw provider event string (e.g. "charge.success") */
   eventType: string
   /** Normalized event — provider-agnostic, used by the webhook service */
-  normalizedEvent: 'payment.success' | 'payment.failed' | 'connect.transfer_created' | 'connect.capability_updated' | 'unknown'
+  normalizedEvent: 'payment.success' | 'payment.failed' | 'connect.transfer_created' | 'connect.capability_updated' | 'connect.account_updated' | 'refund.paid' | 'refund.failed' | 'unknown'
   /** Our internal payment reference, extracted from the webhook payload */
   reference: string
   /**

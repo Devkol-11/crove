@@ -3,7 +3,7 @@ import { buildApp } from './app'
 import { env } from './config'
 import { createQueues } from './pub_sub'
 import { startNotificationsWorker } from './pub_sub/workers/notifications.worker'
-import { startEscrowWorker } from './pub_sub/workers/escrow.worker'
+import { startEscrowWorker, rescheduleExpiryJobs } from './pub_sub/workers/escrow.worker'
 import { startAuthWorker } from './pub_sub/workers/auth.worker'
 import { startPaymentWorker } from './pub_sub/workers/payment.worker'
 import { startPayoutWorker } from './pub_sub/workers/payout.worker'
@@ -24,7 +24,7 @@ process.on('uncaughtException', (err: Error) => {
 
 process.on('unhandledRejection', (reason: unknown) => {
   const message = reason instanceof Error ? reason.message : String(reason)
-  const stack   = reason instanceof Error ? reason.stack   : undefined
+  const stack = reason instanceof Error ? reason.stack : undefined
   serverLog.fatal({ reason: message, stack }, 'Unhandled promise rejection — process will exit')
   process.exit(1)
 })
@@ -69,7 +69,7 @@ const start = async () => {
   }
 
   process.once('SIGTERM', () => void shutdown('SIGTERM'))
-  process.once('SIGINT',  () => void shutdown('SIGINT'))
+  process.once('SIGINT', () => void shutdown('SIGINT'))
 
   // ── BullMQ queues and workers ─────────────────────────────────────────────
   // Redis is confirmed reachable at this point (redis.plugin pre-flight passed).
@@ -83,6 +83,9 @@ const start = async () => {
     startPaymentWorker(app.redis),
     startPayoutWorker(app.redis),
   ]
+
+  // Re-enqueue any expiry jobs that were lost if Redis was cleared between restarts
+  await rescheduleExpiryJobs()
 
   // ── HTTP listen ───────────────────────────────────────────────────────────
 

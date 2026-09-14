@@ -139,4 +139,36 @@ export default async function escrowRoutes(app: FastifyInstance) {
     { ...auth, config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
     h.getLedgerBalance,
   )
+
+  // ── Platform admin routes ─────────────────────────────────────────────────
+  //
+  // Protected by X-Platform-Key header checked in the preHandler below.
+  // Only expose these endpoints to internal tools / staff dashboards.
+  // Replace the key check with proper admin authentication before going to prod.
+
+  const platformAuth = {
+    preHandler: [
+      async (request: import('fastify').FastifyRequest, reply: import('fastify').FastifyReply) => {
+        const key = request.headers['x-platform-key']
+        const expected = process.env['PLATFORM_ADMIN_KEY']
+        if (!expected || !key || key !== expected) {
+          return reply.code(401).send({ error: 'Invalid or missing platform key' })
+        }
+      },
+    ],
+  }
+
+  // POST /platform/:id/review — move Held escrow to AwaitingAction for platform review
+  app.post(
+    '/platform/:id/review',
+    { ...platformAuth, config: { rateLimit: { max: 20, timeWindow: '1 minute' } } },
+    h.moveToReview,
+  )
+
+  // POST /platform/disputes/:id/resolve — platform override: force-resolve a stuck dispute
+  app.post(
+    '/platform/disputes/:id/resolve',
+    { ...platformAuth, config: { rateLimit: { max: 20, timeWindow: '1 minute' } } },
+    h.platformResolveDispute,
+  )
 }

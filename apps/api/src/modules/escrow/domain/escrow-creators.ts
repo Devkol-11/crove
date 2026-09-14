@@ -168,14 +168,24 @@ export async function createQuickLinkEscrow(tx: DbTx, input: CreateQuickEscrowIn
       expiresAt:   new Date(Date.now() + input.expiresInDays * 24 * 60 * 60 * 1000),
       participants: {
         create: {
-          userId:        null,
-          name:          input.creatorName,
-          email:         input.creatorEmail,
-          role:          input.creatorRole,
-          accountNumber: input.payeeAccount?.accountNumber,
-          bankCode:      input.payeeAccount?.bankCode,
-          bankName:      input.payeeAccount?.bankName,
-          accountName:   input.payeeAccount?.accountName,
+          userId: null,
+          name:   input.creatorName,
+          email:  input.creatorEmail,
+          role:   input.creatorRole,
+          // Spread payout account fields based on type — only populated when creator is Payee
+          ...(input.payeeAccount?.type === 'bank_account'
+            ? {
+                accountNumber: input.payeeAccount.accountNumber,
+                bankCode:      input.payeeAccount.bankCode,
+                bankName:      input.payeeAccount.bankName,
+                accountName:   input.payeeAccount.accountName,
+              }
+            : input.payeeAccount?.type === 'crypto_wallet'
+              ? {
+                  walletAddress: input.payeeAccount.walletAddress,
+                  walletNetwork: input.payeeAccount.network,
+                }
+              : {}),
         },
       },
     },

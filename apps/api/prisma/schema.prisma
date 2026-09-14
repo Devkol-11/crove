@@ -209,11 +209,14 @@ model EscrowParticipant {
   email    String?    // For invited/non-auth participants
   role     EscrowRole
 
-  // Payee payout account — required before an escrow can be funded
-  accountNumber  String?  // 10-digit NUBAN
-  bankCode       String?  // e.g. "058" for GTBank — used by payment provider for payouts
-  bankName       String?  // e.g. "Guaranty Trust Bank" — for display
-  accountName    String?  // Verified name on the account
+  // Payee payout account — exactly one of the two blocks below is populated based on escrow currency.
+  // NGN escrow → bank_account fields; USD escrow → crypto_wallet fields.
+  accountNumber  String?  // 10-digit NUBAN (NGN escrows)
+  bankCode       String?  // e.g. "058" for GTBank (NGN escrows)
+  bankName       String?  // e.g. "Guaranty Trust Bank" (NGN escrows)
+  accountName    String?  // Verified name on the bank account (NGN escrows)
+  walletAddress  String?  // USDT wallet address (USD escrows)
+  walletNetwork  String?  // "USDT_TRC20" | "USDT_BEP20" (USD escrows)
   bachsAccountId String?  // Bachs Connect account ID (acct_xxx) — set when Payee joins
 
   joinedAt DateTime @default(now())
@@ -314,6 +317,7 @@ model Payment {
   escrow           Escrow        @relation(fields: [escrowId], references: [id])
   reference        String        @unique  // Our internal reference — echoed by provider
   providerRef      String?                // Provider's own transaction ID
+  chargeId         String?                // Bachs charge ID (ch_xxx) — stored from collection.succeeded webhook; used to create refunds
   provider         String                 // "paystack" | "bachs"
   amount           Decimal       @db.Decimal(15, 2)
   currency         String        @default("NGN")

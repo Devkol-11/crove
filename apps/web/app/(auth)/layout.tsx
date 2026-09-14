@@ -1,35 +1,49 @@
 import Link from "next/link";
-
-function CroveMark() {
-  return (
-    <svg width="26" height="26" viewBox="0 0 28 28" fill="none" aria-hidden="true">
-      <path d="M3 7 L13 3 L13 14 L3 18 Z" fill="var(--color-accent)" />
-      <path d="M13 14 L23 10 L25 21 L15 25 Z" fill="var(--color-accent)" opacity="0.55" />
-      <rect x="9" y="12" width="10" height="4" rx="0.5" fill="var(--color-accent)" opacity="0.9" />
-    </svg>
-  );
-}
+import { CroveLogo } from "@/components/landing/Navbar";
+import { WavyBackground } from "@/components/ui/wavy-background";
 
 export default function AuthLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div
-      className="min-h-screen flex flex-col items-center justify-center px-4 py-12"
-      style={{ backgroundColor: "var(--color-bg)" }}
-    >
-      <Link href="/" className="mb-8 flex items-center gap-2.5">
-        <CroveMark />
-        <span
-          style={{
-            fontFamily: "var(--font-heading)",
-            color: "var(--color-text)",
-            fontWeight: 600,
-            fontSize: "1rem",
-          }}
-        >
-          Crove
-        </span>
-      </Link>
-      {children}
+    <div className="min-h-screen flex">
+      {/* ── Left: Form panel ─────────────────────────────── */}
+      <div
+        className="flex-1 flex flex-col min-h-screen px-8 lg:px-14 py-10"
+        style={{ backgroundColor: "var(--color-bg)" }}
+      >
+        {/* Logo */}
+        <Link href="/" className="flex items-center gap-2.5 mb-12 shrink-0">
+          <CroveLogo size={22} />
+          <span
+            style={{
+              fontFamily: "var(--font-heading)",
+              color: "var(--color-text)",
+              fontWeight: 600,
+              fontSize: "1rem",
+              letterSpacing: "-0.01em",
+            }}
+          >
+            Crove
+          </span>
+        </Link>
+
+        {/* Centered form */}
+        <div className="flex-1 flex items-center justify-center">
+          <div className="w-full max-w-100">{children}</div>
+        </div>
+      </div>
+
+      {/* ── Right: Hero background panel ──────────────────── */}
+      <div className="hidden lg:block lg:w-[48%] xl:w-[44%] relative overflow-hidden">
+        <div className="absolute inset-0">
+          <WavyBackground
+            containerClassName="h-full w-full"
+            backgroundFill="#060e08"
+            speed="slow"
+            waveOpacity={0.4}
+            blur={8}
+          />
+        </div>
+      </div>
     </div>
   );
 }

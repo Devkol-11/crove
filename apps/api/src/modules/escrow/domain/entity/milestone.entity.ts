@@ -21,11 +21,9 @@ export class MilestoneEntity extends Entity<string> {
     return this.props.description
   }
   get amount(): number {
-    return Number(this.props.amount)
+    return parseFloat(this.props.amount.toString())
   }
-  get currency(): string {
-    return 'NGN'
-  } // currency lives on the parent Escrow
+  // currency lives on the parent Escrow — read escrow.currency, not milestone.currency
   get status(): MilestoneStatus {
     return this.props.status as MilestoneStatus
   }

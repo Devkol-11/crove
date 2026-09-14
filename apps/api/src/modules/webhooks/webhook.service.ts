@@ -8,6 +8,7 @@ import {
 import type { WebhookVerificationResult } from '../../third_party/payment_providers/types'
 import { getQueues } from '../../pub_sub'
 import { PAYMENT_JOBS } from '../../pub_sub/workers/payment.worker'
+import { appendEscrowEvent } from '../escrow/domain/helpers/escrow-event.helper'
 import { log } from '../../lib/logger'
 
 const webhookLog = log.config
@@ -17,7 +18,7 @@ type Headers = Record<string, string | string[] | undefined>
 // Identifies the payment provider from the inbound request headers.
 // Each provider stamps its own signature header — no body parsing needed.
 function detectProvider(headers: Headers): 'bachs' | 'paystack' | null {
-  if (headers['x-bachs-signature'])    return 'bachs'
+  if (headers['x-bachs-signature']) return 'bachs'
   if (headers['x-paystack-signature']) return 'paystack'
   return null
 }
@@ -33,7 +34,7 @@ type ProviderHandler = (
 ) => Promise<{ received: true }>
 
 const PROVIDER_HANDLERS: Record<string, ProviderHandler> = {
-  bachs:    (body, headers, svc) => svc.handleBachsWebhook(body, headers),
+  bachs: (body, headers, svc) => svc.handleBachsWebhook(body, headers),
   paystack: (body, headers, svc) => svc.handlePaystackWebhook(body, headers),
 }
 
@@ -60,9 +61,8 @@ export class WebhookService {
   // ── Per-provider handlers ────────────────────────────────────────────────────
 
   async handleBachsWebhook(rawBody: Buffer, headers: Headers): Promise<{ received: true }> {
-    const secret = env.NODE_ENV === 'production'
-      ? env.BACHS_LIVE_WH_SECRET
-      : env.BACHS_TEST_WH_SECRET
+    const secret =
+      env.NODE_ENV === 'production' ? env.BACHS_LIVE_WH_SECRET : env.BACHS_TEST_WH_SECRET
 
     if (!secret) {
       webhookLog.error('Bachs webhook secret is not configured — cannot verify signature')
@@ -120,6 +120,7 @@ export class WebhookService {
     const existing = await this.db.inboundWebhook.findUnique({
       where: { reference: dedupKey },
     })
+
     if (existing) {
       webhookLog.info({ provider, dedupKey }, 'duplicate webhook — already processed, acknowledged')
       return { received: true }
@@ -130,8 +131,8 @@ export class WebhookService {
       await this.db.inboundWebhook.create({
         data: {
           provider,
-          eventType:  result.eventType,
-          reference:  dedupKey,
+          eventType: result.eventType,
+          reference: dedupKey,
           rawPayload: result.data as object,
         },
       })
@@ -150,11 +151,15 @@ export class WebhookService {
       const { paymentQueue } = getQueues()
       await paymentQueue?.add(
         PAYMENT_JOBS.CONFIRM_PAYMENT,
-        { reference: result.reference, eventId: result.eventId },
+        {
+          reference: result.reference,
+          eventId: result.eventId,
+          chargeId: result.data.charge_id as string | undefined,
+        },
         { jobId: `confirm_${dedupKey.replace(/:/g, '_')}` },
       )
       webhookLog.info(
-        { provider, reference: result.reference, eventId: result.eventId },
+        { provider, reference: result.reference, eventId: result.eventId, chargeId: result.data.charge_id },
         'payment.success webhook — confirm job enqueued',
       )
     }
@@ -162,11 +167,11 @@ export class WebhookService {
     if (result.normalizedEvent === 'payment.failed') {
       await this.db.payment.updateMany({
         where: { reference: result.reference },
-        data:  { status: 'Failed' },
+        data: { status: 'Failed' },
       })
       await this.db.inboundWebhook.updateMany({
         where: { reference: dedupKey },
-        data:  { processedAt: new Date() },
+        data: { processedAt: new Date() },
       })
       webhookLog.info(
         { provider, reference: result.reference },
@@ -175,26 +180,91 @@ export class WebhookService {
     }
 
     if (result.normalizedEvent === 'connect.transfer_created') {
-      // A transfer from the platform to a Connect account was created.
-      // The payment reference on these events is the payout reference we set when calling createTransfer.
-      webhookLog.info(
-        { provider, reference: result.reference, eventId: result.eventId },
-        'connect.transfer_created webhook — payout acknowledged',
-      )
+      // Bachs transfer objects have no echoed reference field — link back to
+      // the escrow via the transferId stored in the PayoutInitiated event metadata.
+      const transferId = result.data.id as string | undefined
+
+      if (transferId) {
+        const payoutEvent = await this.db.escrowEvent.findFirst({
+          where: {
+            type: 'PayoutInitiated',
+            metadata: { path: ['transferId'], equals: transferId },
+          },
+        })
+
+        if (payoutEvent) {
+          await appendEscrowEvent(this.db, payoutEvent.escrowId, 'PayoutConfirmed', 'system', {
+            transferId,
+            transferStatus: result.data.status as string | undefined,
+          })
+          webhookLog.info(
+            { escrowId: payoutEvent.escrowId, transferId },
+            'connect.transfer_created — PayoutConfirmed appended',
+          )
+        } else {
+          webhookLog.warn(
+            { transferId },
+            'connect.transfer_created — no matching PayoutInitiated event found',
+          )
+        }
+      }
+
       await this.db.inboundWebhook.updateMany({
         where: { reference: dedupKey },
-        data:  { processedAt: new Date() },
+        data: { processedAt: new Date() },
       })
     }
 
     if (result.normalizedEvent === 'connect.capability_updated') {
       webhookLog.info(
-        { provider, eventId: result.eventId },
-        'connect.capability_updated webhook — acknowledged (no action)',
+        { provider, eventId: result.eventId, accountId: result.data.account_id },
+        'connect.capability_updated — acknowledged',
       )
       await this.db.inboundWebhook.updateMany({
         where: { reference: dedupKey },
-        data:  { processedAt: new Date() },
+        data: { processedAt: new Date() },
+      })
+    }
+
+    if (result.normalizedEvent === 'connect.account_updated') {
+      webhookLog.info(
+        { provider, eventId: result.eventId, accountId: result.data.id },
+        'connect.account_updated — acknowledged',
+      )
+      await this.db.inboundWebhook.updateMany({
+        where: { reference: dedupKey },
+        data: { processedAt: new Date() },
+      })
+    }
+
+    if (result.normalizedEvent === 'refund.paid' || result.normalizedEvent === 'refund.failed') {
+      const chargeId = result.data.charge_id as string | undefined
+      const refundId = result.data.refund_id as string | undefined
+      const succeeded = result.normalizedEvent === 'refund.paid'
+
+      // Find the payment by chargeId to get the escrowId
+      if (chargeId) {
+        const payment = await this.db.payment.findFirst({ where: { chargeId } })
+        if (payment) {
+          await appendEscrowEvent(
+            this.db,
+            payment.escrowId,
+            succeeded ? 'RefundConfirmed' : 'RefundFailed',
+            'system',
+            { refundId, chargeId },
+          )
+          webhookLog.info(
+            { escrowId: payment.escrowId, refundId, chargeId, succeeded },
+            `${result.normalizedEvent} — escrow event appended`,
+          )
+        } else {
+          webhookLog.warn({ chargeId, refundId }, `${result.normalizedEvent} — no payment found for chargeId`)
+        }
+      }
+
+      await this.db.inboundWebhook.updateMany({
+        where: { reference: dedupKey },
+        data: { processedAt: new Date() },
       })
     }
 

@@ -53,7 +53,8 @@ export class EscrowAggregate extends AggregateRoot<string> {
     return this.props.status as EscrowStatus
   }
   get amount(): number {
-    return Number(this.props.amount)
+    // Prisma Decimal → string preserves exact precision; parseFloat gives best JS float representation
+    return parseFloat(this.props.amount.toString())
   }
   get currency(): string {
     return this.props.currency
@@ -147,6 +148,7 @@ export class EscrowAggregate extends AggregateRoot<string> {
   static assertValidCreationInput(input: CreateEscrowInput): void {
     const SUPPORTED_CURRENCIES = ['NGN', 'USD', 'GBP', 'EUR']
     const MAX_ESCROW_AMOUNT = 100_000_000
+    const MIN_ESCROW_AMOUNT = 1
 
     if (!SUPPORTED_CURRENCIES.includes(input.currency)) {
       throw new EscrowUnsupportedCurrencyError(
@@ -156,6 +158,11 @@ export class EscrowAggregate extends AggregateRoot<string> {
 
     if (input.type === EscrowType.Milestone) {
       const total = input.milestones.reduce((sum, m) => sum + m.amount, 0)
+      if (total < MIN_ESCROW_AMOUNT) {
+        throw new MilestoneTotalExceedsLimitError(
+          `Total milestone amount (${total}) must be at least ${MIN_ESCROW_AMOUNT}.`,
+        )
+      }
       if (total > MAX_ESCROW_AMOUNT) {
         throw new MilestoneTotalExceedsLimitError(
           `Total milestone amount (${total}) cannot exceed ${MAX_ESCROW_AMOUNT}.`,

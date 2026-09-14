@@ -114,6 +114,9 @@ export function verifyBachsWebhook(
     : payload.type === 'collection.failed'   ? 'payment.failed'
     : payload.type === 'transfer.created'    ? 'connect.transfer_created'
     : payload.type === 'capability.updated'  ? 'connect.capability_updated'
+    : payload.type === 'account.updated'     ? 'connect.account_updated'
+    : payload.type === 'refund.paid'         ? 'refund.paid'
+    : payload.type === 'refund.failed'       ? 'refund.failed'
     : 'unknown'
 
   return {

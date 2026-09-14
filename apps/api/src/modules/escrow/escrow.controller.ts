@@ -9,6 +9,7 @@ import {
   joinVerifySchema,
   openDisputeSchema,
   resolveDisputeSchema,
+  platformResolveDisputeSchema,
   paginationSchema,
 } from './escrow.schema'
 
@@ -104,7 +105,7 @@ export function escrowHandlers(service: EscrowService) {
     // POST /:id/cancel
     cancel: async (request: FastifyRequest, reply: FastifyReply) => {
       const { id } = request.params as { id: string }
-      return reply.send(await service.cancelEscrow(id, request.authUser!.id))
+      return reply.send(await service.cancelEscrow(id, request.authUser!.id, request.authUser!.email))
     },
 
     // POST /:id/dispute
@@ -153,6 +154,21 @@ export function escrowHandlers(service: EscrowService) {
       return reply.send(
         await service.getLedgerBalance(id, request.authUser!.id, request.authUser!.email),
       )
+    },
+
+    // ── Platform admin ────────────────────────────────────────────────────────
+
+    // POST /platform/:id/review — move a Held escrow to AwaitingAction (platform review)
+    moveToReview: async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = request.params as { id: string }
+      return reply.send(await service.moveToReview(id))
+    },
+
+    // POST /platform/disputes/:id/resolve — force-resolve a dispute (platform override)
+    platformResolveDispute: async (request: FastifyRequest, reply: FastifyReply) => {
+      const { id } = request.params as { id: string }
+      const { resolution, decision } = platformResolveDisputeSchema.parse(request.body)
+      return reply.send(await service.platformResolveDispute(id, resolution, decision))
     },
   }
 }

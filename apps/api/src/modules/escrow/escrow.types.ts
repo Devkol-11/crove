@@ -1,28 +1,28 @@
 export enum EscrowType {
-  Standard    = 'Standard',    // Payer/Payee — delivery + confirmation
-  Milestone   = 'Milestone',   // Progress-based multi-payment
+  Standard = 'Standard', // Payer/Payee — delivery + confirmation
+  Milestone = 'Milestone', // Progress-based multi-payment
   Conditional = 'Conditional', // Condition-gated release
-  Deposit     = 'Deposit',     // Upfront reservation deposit
+  Deposit = 'Deposit', // Upfront reservation deposit
 }
 
 export enum EscrowStatus {
-  Created         = 'Created',
+  Created = 'Created',
   AwaitingPayment = 'AwaitingPayment',
-  Funded          = 'Funded',
-  Held            = 'Held',
-  AwaitingAction  = 'AwaitingAction',
-  Released        = 'Released',
-  Refunded        = 'Refunded',
-  Disputed        = 'Disputed',
-  Cancelled       = 'Cancelled',
+  Funded = 'Funded',
+  Held = 'Held',
+  AwaitingAction = 'AwaitingAction',
+  Released = 'Released',
+  Refunded = 'Refunded',
+  Disputed = 'Disputed',
+  Cancelled = 'Cancelled',
 }
 
 export enum MilestoneStatus {
-  Pending    = 'Pending',
+  Pending = 'Pending',
   InProgress = 'InProgress',
-  Submitted  = 'Submitted', // Payee submitted for payer approval
-  Approved   = 'Approved',  // Payer approved
-  Released   = 'Released',  // Funds disbursed for this milestone
+  Submitted = 'Submitted', // Payee submitted for payer approval
+  Approved = 'Approved', // Payer approved
+  Released = 'Released', // Funds disbursed for this milestone
 }
 
 export enum EscrowRole {
@@ -31,31 +31,34 @@ export enum EscrowRole {
 }
 
 export enum DisputeStatus {
-  Open        = 'Open',
+  Open = 'Open',
   UnderReview = 'UnderReview',
-  Resolved    = 'Resolved',
-  Closed      = 'Closed',
+  Resolved = 'Resolved',
+  Closed = 'Closed',
 }
 
 export enum TransactionType {
   Funding = 'Funding',
   Release = 'Release',
-  Refund  = 'Refund',
-  Fee     = 'Fee',
+  Refund = 'Refund',
+  Fee = 'Fee',
 }
 
 export enum TransactionStatus {
-  Pending    = 'Pending',
+  Pending = 'Pending',
   Processing = 'Processing',
-  Completed  = 'Completed',
-  Failed     = 'Failed',
+  Completed = 'Completed',
+  Failed = 'Failed',
 }
 
 export enum LedgerEntryType {
   Funding = 'Funding', // Payer deposits funds
   Release = 'Release', // Funds disbursed to payee
   Refund  = 'Refund',  // Funds returned to payer
-  Fee     = 'Fee',     // Platform fee deducted
+  // TODO: Fee is never collected. Wire appendLedgerEntry({ type: Fee }) into
+  // releaseEscrow / refundEscrow once fee structure is defined. Deduct from payout
+  // amount rather than creating a separate transfer.
+  Fee = 'Fee',
 }
 
 // ── State machine ─────────────────────────────────────────────────────────────
@@ -69,25 +72,24 @@ export enum LedgerEntryType {
 // resolveDispute) or platform review (Held → AwaitingAction → Refunded).
 // Neither party can unilaterally refund a funded escrow.
 export const VALID_TRANSITIONS: Record<EscrowStatus, EscrowStatus[]> = {
-  [EscrowStatus.Created]:         [EscrowStatus.AwaitingPayment, EscrowStatus.Funded, EscrowStatus.Cancelled],
+  [EscrowStatus.Created]: [
+    EscrowStatus.AwaitingPayment,
+    EscrowStatus.Funded,
+    EscrowStatus.Cancelled,
+  ],
   [EscrowStatus.AwaitingPayment]: [EscrowStatus.Funded, EscrowStatus.Cancelled],
   // Payment worker atomically transitions Funded → Held — no other code moves from Funded
-  [EscrowStatus.Funded]:          [EscrowStatus.Held],
-  [EscrowStatus.Held]: [
-    EscrowStatus.AwaitingAction,
-    EscrowStatus.Released,
-    EscrowStatus.Disputed,
-  ],
+  [EscrowStatus.Funded]: [EscrowStatus.Held],
+  [EscrowStatus.Held]: [EscrowStatus.AwaitingAction, EscrowStatus.Released, EscrowStatus.Disputed],
   // AwaitingAction = platform review in progress; can resolve either way
   [EscrowStatus.AwaitingAction]: [
     EscrowStatus.Released,
     EscrowStatus.Refunded,
     EscrowStatus.Disputed,
   ],
-  [EscrowStatus.Released]:  [],
-  [EscrowStatus.Refunded]:  [],
-  // Disputed → Released or Refunded via resolveDispute (other party must agree)
-  [EscrowStatus.Disputed]:  [EscrowStatus.Released, EscrowStatus.Refunded],
+  [EscrowStatus.Released]: [],
+  [EscrowStatus.Refunded]: [],
+  [EscrowStatus.Disputed]: [EscrowStatus.Released, EscrowStatus.Refunded],
   [EscrowStatus.Cancelled]: [],
 }
 

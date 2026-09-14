@@ -6,25 +6,44 @@ const MAX_ESCROW_AMOUNT = 100_000_000
 
 // ── Shared sub-schemas ────────────────────────────────────────────────────────
 
-export const payeeAccountSchema = z.object({
+// NGN escrow payees provide a Nigerian bank account
+export const bankAccountSchema = z.object({
+  type:          z.literal('bank_account'),
   accountNumber: z.string().regex(/^\d{10}$/, 'Account number must be exactly 10 digits'),
   bankCode:      z.string().min(1, 'Bank code is required'),
   bankName:      z.string().min(1, 'Bank name is required'),
   accountName:   z.string().min(1, 'Account name is required'),
 })
 
-export type PayeeAccountInput = z.infer<typeof payeeAccountSchema>
+// USD escrow payees provide a USDT wallet — Bachs only supports TRC20 and BEP20 for payouts
+export const cryptoWalletSchema = z.object({
+  type:          z.literal('crypto_wallet'),
+  walletAddress: z.string().min(10, 'Wallet address is required'),
+  network:       z.enum(['USDT_TRC20', 'USDT_BEP20'], {
+    errorMap: () => ({ message: 'Network must be USDT_TRC20 or USDT_BEP20' }),
+  }),
+})
+
+export const payeeAccountSchema = z.discriminatedUnion('type', [bankAccountSchema, cryptoWalletSchema])
+
+export type BankAccountInput   = z.infer<typeof bankAccountSchema>
+export type CryptoWalletInput  = z.infer<typeof cryptoWalletSchema>
+export type PayeeAccountInput  = z.infer<typeof payeeAccountSchema>
 
 const milestoneInputSchema = z.object({
   title:       z.string().min(1),
   description: z.string().optional(),
-  amount:      z.number().positive().max(MAX_ESCROW_AMOUNT, `Milestone amount cannot exceed ${MAX_ESCROW_AMOUNT}`),
+  amount:      z.number().min(1, 'Minimum milestone amount is 1').max(MAX_ESCROW_AMOUNT, `Milestone amount cannot exceed ${MAX_ESCROW_AMOUNT}`),
   deadline:    z.string().datetime().optional(),
 })
 
 const creatorRoleSchema = z.nativeEnum(EscrowRole, {
   errorMap: () => ({ message: 'creatorRole must be "Payer" or "Payee"' }),
 })
+
+// Minimum per-transaction amount (in major currency units — ₦, $, £, €)
+// Providers enforce their own minimums; this guards at the application boundary.
+const MIN_ESCROW_AMOUNT = 1
 
 // ── Full escrow creation (requires auth) ──────────────────────────────────────
 
@@ -33,7 +52,7 @@ export const createEscrowSchema = z.discriminatedUnion('type', [
     type:           z.literal(EscrowType.Standard),
     title:          z.string().min(1),
     description:    z.string().optional(),
-    amount:         z.number().positive().max(MAX_ESCROW_AMOUNT, `Amount cannot exceed ${MAX_ESCROW_AMOUNT}`),
+    amount:         z.number().min(MIN_ESCROW_AMOUNT, `Minimum escrow amount is ${MIN_ESCROW_AMOUNT}`).max(MAX_ESCROW_AMOUNT, `Amount cannot exceed ${MAX_ESCROW_AMOUNT}`),
     currency:       z.string().default('NGN'),
     creatorRole:    creatorRoleSchema,
     expiresInDays:  z.number().int().min(1).max(365).optional(),
@@ -55,7 +74,7 @@ export const createEscrowSchema = z.discriminatedUnion('type', [
     type:             z.literal(EscrowType.Conditional),
     title:            z.string().min(1),
     description:      z.string().optional(),
-    amount:           z.number().positive().max(MAX_ESCROW_AMOUNT, `Amount cannot exceed ${MAX_ESCROW_AMOUNT}`),
+    amount:           z.number().min(MIN_ESCROW_AMOUNT, `Minimum escrow amount is ${MIN_ESCROW_AMOUNT}`).max(MAX_ESCROW_AMOUNT, `Amount cannot exceed ${MAX_ESCROW_AMOUNT}`),
     currency:         z.string().default('NGN'),
     creatorRole:      creatorRoleSchema,
     expiresInDays:    z.number().int().min(1).max(365).optional(),
@@ -66,7 +85,7 @@ export const createEscrowSchema = z.discriminatedUnion('type', [
     type:           z.literal(EscrowType.Deposit),
     title:          z.string().min(1),
     description:    z.string().optional(),
-    amount:         z.number().positive().max(MAX_ESCROW_AMOUNT, `Amount cannot exceed ${MAX_ESCROW_AMOUNT}`),
+    amount:         z.number().min(MIN_ESCROW_AMOUNT, `Minimum escrow amount is ${MIN_ESCROW_AMOUNT}`).max(MAX_ESCROW_AMOUNT, `Amount cannot exceed ${MAX_ESCROW_AMOUNT}`),
     currency:       z.string().default('NGN'),
     creatorRole:    creatorRoleSchema,
     expiresInDays:  z.number().int().min(1).max(365).optional(),
@@ -81,7 +100,7 @@ export type CreateEscrowInput = z.infer<typeof createEscrowSchema>
 export const createQuickEscrowSchema = z.object({
   title:         z.string().min(1, 'Title is required'),
   description:   z.string().optional(),
-  amount:        z.number().positive('Amount must be positive').max(MAX_ESCROW_AMOUNT, `Amount cannot exceed ${MAX_ESCROW_AMOUNT}`),
+  amount:        z.number().min(1, 'Minimum escrow amount is 1').max(MAX_ESCROW_AMOUNT, `Amount cannot exceed ${MAX_ESCROW_AMOUNT}`),
   currency:      z.string().default('NGN'),
   creatorName:   z.string().min(1, 'Your name is required'),
   creatorEmail:  z.string().email('A valid email is required'),
@@ -89,12 +108,29 @@ export const createQuickEscrowSchema = z.object({
   expiresInDays: z.number().int().min(1).max(90).default(7),
   payeeAccount:  payeeAccountSchema.optional(),
 }).superRefine((data, ctx) => {
-  if (data.creatorRole === EscrowRole.Payee && !data.payeeAccount) {
-    ctx.addIssue({
-      code:    z.ZodIssueCode.custom,
-      path:    ['payeeAccount'],
-      message: 'Your bank account details are required when you are the Payee.',
-    })
+  if (data.creatorRole === EscrowRole.Payee) {
+    if (!data.payeeAccount) {
+      ctx.addIssue({
+        code:    z.ZodIssueCode.custom,
+        path:    ['payeeAccount'],
+        message: 'Your payout account details are required when you are the Payee.',
+      })
+      return
+    }
+    if (data.currency === 'USD' && data.payeeAccount.type !== 'crypto_wallet') {
+      ctx.addIssue({
+        code:    z.ZodIssueCode.custom,
+        path:    ['payeeAccount', 'type'],
+        message: 'USD escrows require a USDT crypto wallet address (network: USDT_TRC20 or USDT_BEP20).',
+      })
+    }
+    if (data.currency !== 'USD' && data.payeeAccount.type !== 'bank_account') {
+      ctx.addIssue({
+        code:    z.ZodIssueCode.custom,
+        path:    ['payeeAccount', 'type'],
+        message: 'NGN escrows require a Nigerian bank account.',
+      })
+    }
   }
 })
 
@@ -151,6 +187,10 @@ export const resolveDisputeSchema = z.object({
   }),
 })
 export type ResolveDisputeInput = z.infer<typeof resolveDisputeSchema>
+
+// Platform-admin override — same shape, separate schema for clarity
+export const platformResolveDisputeSchema = resolveDisputeSchema
+export type PlatformResolveDisputeInput = ResolveDisputeInput
 
 // ── Milestones ────────────────────────────────────────────────────────────────
 

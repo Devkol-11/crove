@@ -189,6 +189,47 @@ async function handleMilestoneApproved(event: DomainEvent) {
   }
 }
 
+// ── Startup reschedule ────────────────────────────────────────────────────────
+//
+// On process restart Redis job state is durable, but can be lost if Redis was
+// flushed or the server was first deployed against an existing DB. This function
+// re-enqueues any missing expiry jobs for escrows that are still in a
+// pre-payment state and have not yet passed their expiry date.
+
+export async function rescheduleExpiryJobs(): Promise<void> {
+  const { escrowQueue } = getQueues()
+  if (!escrowQueue) return
+
+  const now = new Date()
+  const pending = await db.escrow.findMany({
+    where: {
+      status:    { in: ['Created', 'AwaitingPayment'] },
+      expiresAt: { gt: now },
+    },
+    select: { id: true, expiresAt: true },
+  })
+
+  if (pending.length === 0) {
+    workerLog.info('rescheduleExpiryJobs: no pending expiry jobs to reschedule')
+    return
+  }
+
+  let rescheduled = 0
+  for (const { id, expiresAt } of pending) {
+    const jobId = `expire-${id}`
+    const existing = await escrowQueue.getJob(jobId)
+    // Delayed/waiting jobs are still live — skip them
+    if (existing) continue
+
+    const delay = expiresAt!.getTime() - Date.now()
+    if (delay <= 0) continue // already past expiry — skip; next cron pass or manual action handles it
+    await escrowQueue.add(ESCROW_JOBS.EXPIRE_ESCROW, { escrowId: id }, { delay, jobId })
+    rescheduled++
+  }
+
+  workerLog.info({ found: pending.length, rescheduled }, 'rescheduleExpiryJobs complete')
+}
+
 // ── Worker ────────────────────────────────────────────────────────────────────
 
 export function startEscrowWorker(redis: Redis) {
